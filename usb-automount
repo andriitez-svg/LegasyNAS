@@ -9,11 +9,17 @@
 
 set -u
 
+# Shared with the Python services, so both sides agree on the data root and
+# the service account without duplicating the values by hand.
+CONFIG_FILE=/etc/nas-control-plane.conf
+[ -f "$CONFIG_FILE" ] && . "$CONFIG_FILE"
+
 ACTION="${1:-}"
 DEV="${2:-}"
-BASE=/var/downloads/USB
-OWNER_UID=1000   # debian - the account the Fetcher and Files apps run as
-OWNER_GID=1000
+BASE="${ROOT_DIR:-/var/downloads}/USB"
+OWNER_UID="${OWNER_UID:-1000}"   # debian - the account the Fetcher and Files apps run as
+OWNER_GID="${OWNER_GID:-1000}"
+INTERNAL_DISK_PREFIX="${INTERNAL_DISK_PREFIX:-sda}"
 
 log() { logger -t usb-automount "$*"; }
 
@@ -26,7 +32,7 @@ safe_name() {
 case "$ACTION" in
 add)
     # Never touch the internal system disk, whatever udev hands over.
-    case "$DEV" in sda*) exit 0 ;; esac
+    case "$DEV" in ${INTERNAL_DISK_PREFIX}*) exit 0 ;; esac
     NODE="/dev/$DEV"
     [ -b "$NODE" ] || exit 0
 

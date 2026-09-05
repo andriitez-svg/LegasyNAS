@@ -1,0 +1,29 @@
+# Shared configuration for the NAS control-plane services (Fetcher, Files,
+# Desktop shell) and the USB automount script. Installed to
+# /etc/nas-control-plane.conf. KEY=value, no spaces around "=", "#" comments
+# only on their own line (this file is sourced directly by a POSIX shell
+# script as well as parsed by Python, so keep it that simple).
+#
+# The values below match what shipped hardcoded before this file existed -
+# installing it changes nothing until you edit a value.
+
+# Root of the shared data tree used by both the Files app and Fetcher.
+ROOT_DIR=/var/downloads
+
+# Ports each service listens on.
+PORT_FILES=8093
+PORT_FETCHER=8092
+PORT_DESKTOP=8095
+
+# Unix account the services run as - USB sticks without native ownership
+# (FAT/exFAT) are mounted writable by this uid/gid.
+OWNER_UID=1000
+OWNER_GID=1000
+
+# Mountpoint the Desktop shell's storage tile reports on. Set this to
+# wherever your data volume actually mounts.
+DATA_MOUNT=/mnt/data
+
+# Device-name prefix usb-automount treats as internal, non-removable storage
+# and refuses to touch, even if it were ever offered a matching device.
+INTERNAL_DISK_PREFIX=sda

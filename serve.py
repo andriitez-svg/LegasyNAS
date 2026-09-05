@@ -2,11 +2,36 @@
 import http.server
 import socketserver
 import subprocess
+import os
 import urllib.request
 import urllib.error
 
+CONFIG_FILE = "/etc/nas-control-plane.conf"
+
+def _load_config_file():
+    cfg = {}
+    try:
+        with open(CONFIG_FILE) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                cfg[key.strip()] = value.strip()
+    except OSError:
+        pass
+    return cfg
+
+_FILE_CONFIG = _load_config_file()
+
+def config(key, default):
+    """Env var wins (a systemd unit or manual override), then the shared
+    config file, then this hardcoded default - so nothing changes for anyone
+    who hasn't touched /etc/nas-control-plane.conf."""
+    return os.environ.get(key, _FILE_CONFIG.get(key, default))
+
 GLANCES_BASE = "http://127.0.0.1:61208/api/3"
-PORT = 8095
+PORT = int(config("PORT_DESKTOP", "8095"))
 
 # Power actions. This service runs as the unprivileged 'debian' user; a narrow
 # rule in /etc/sudoers.d/ls210-power grants passwordless access to exactly

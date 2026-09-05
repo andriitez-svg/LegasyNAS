@@ -6,6 +6,7 @@ After=network.target
 Type=simple
 User=debian
 WorkingDirectory=/home/debian
+EnvironmentFile=-/etc/nas-control-plane.conf
 ExecStart=/usr/bin/python3 /home/debian/fetcher.py
 Restart=on-failure
 RestartSec=5

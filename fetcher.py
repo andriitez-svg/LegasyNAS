@@ -15,9 +15,33 @@ from datetime import datetime
 MAX_RETRIES = 50
 RETRY_DELAY_SECONDS = 10
 
-DOWNLOAD_DIR = "/var/downloads"
+CONFIG_FILE = "/etc/nas-control-plane.conf"
+
+def _load_config_file():
+    cfg = {}
+    try:
+        with open(CONFIG_FILE) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                cfg[key.strip()] = value.strip()
+    except OSError:
+        pass
+    return cfg
+
+_FILE_CONFIG = _load_config_file()
+
+def config(key, default):
+    """Env var wins (a systemd unit or manual override), then the shared
+    config file, then this hardcoded default - so nothing changes for anyone
+    who hasn't touched /etc/nas-control-plane.conf."""
+    return os.environ.get(key, _FILE_CONFIG.get(key, default))
+
+DOWNLOAD_DIR = config("ROOT_DIR", "/var/downloads")
 STATE_FILE = os.path.expanduser("~/fetcher_state.json")
-PORT = 8092
+PORT = int(config("PORT_FETCHER", "8092"))
 
 EXT_BY_CONTENT_TYPE = {
     "application/pdf": ".pdf", "application/zip": ".zip",
