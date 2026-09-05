@@ -1,0 +1,14 @@
+[Unit]
+Description=LS210 Desktop shell (static files + Glances proxy)
+After=network.target
+
+[Service]
+Type=simple
+User=debian
+WorkingDirectory=/home/debian
+ExecStart=/usr/bin/python3 /home/debian/serve.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

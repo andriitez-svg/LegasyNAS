@@ -1,0 +1,14 @@
+[Unit]
+Description=Custom Files browser (port 8093, /var/downloads)
+After=network.target
+
+[Service]
+Type=simple
+User=debian
+WorkingDirectory=/home/debian
+ExecStart=/usr/bin/python3 /home/debian/filemanager.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,119 @@
+#!/bin/sh
+# USB storage auto-mount for the LS210.
+#
+# Sticks are mounted *inside* /var/downloads rather than under /media, so they
+# appear in the Files app with no changes to it at all. That app confines
+# every path to /var/downloads, and a real mountpoint resolves inside that
+# root - unlike a symlink, which realpath() would resolve to somewhere else
+# and the app would (correctly) refuse to open.
+
+set -u
+
+ACTION="${1:-}"
+DEV="${2:-}"
+BASE=/var/downloads/USB
+OWNER_UID=1000   # debian - the account the Fetcher and Files apps run as
+OWNER_GID=1000
+
+log() { logger -t usb-automount "$*"; }
+
+# Labels come off removable media and can contain anything at all, so reduce
+# them to a plain, bounded name before using one as a directory.
+safe_name() {
+    printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-40
+}
+
+case "$ACTION" in
+add)
+    # Never touch the internal system disk, whatever udev hands over.
+    case "$DEV" in sda*) exit 0 ;; esac
+    NODE="/dev/$DEV"
+    [ -b "$NODE" ] || exit 0
+
+    FSTYPE=$(blkid -o value -s TYPE "$NODE" 2>/dev/null)
+    LABEL=$(blkid -o value -s LABEL "$NODE" 2>/dev/null)
+    UUID=$(blkid -o value -s UUID "$NODE" 2>/dev/null)
+    if [ -z "$FSTYPE" ]; then
+        log "$DEV: no filesystem found, ignoring"
+        exit 0
+    fi
+
+    NAME=$(safe_name "${LABEL:-${UUID:-$DEV}}")
+    TARGET="$BASE/$NAME"
+    n=2
+    while mountpoint -q "$TARGET" 2>/dev/null; do
+        TARGET="$BASE/${NAME}_$n"
+        n=$((n + 1))
+    done
+    mkdir -p "$TARGET" || exit 0
+
+    case "$FSTYPE" in
+    vfat)
+        # FAT carries no Unix ownership, so it is assigned here to the account
+        # the web apps run as, otherwise they could not write to the stick.
+        # 'flush' pushes writes out promptly, which matters a lot on media
+        # people tend to pull out without unmounting first.
+        OPTS="rw,noatime,flush,uid=$OWNER_UID,gid=$OWNER_GID,fmask=0133,dmask=0022,iocharset=utf8"
+        ;;
+    exfat)
+        OPTS="rw,noatime,uid=$OWNER_UID,gid=$OWNER_GID,fmask=0133,dmask=0022,iocharset=utf8"
+        ;;
+    ext2 | ext3 | ext4)
+        # Real Unix permissions already on the filesystem; leave them alone.
+        OPTS="rw,noatime"
+        ;;
+    ntfs)
+        log "$DEV: NTFS is not supported by this kernel (no ntfs3, no ntfs-3g)"
+        rmdir "$TARGET" 2>/dev/null
+        exit 0
+        ;;
+    *)
+        OPTS="rw,noatime"
+        ;;
+    esac
+
+    if mount -t "$FSTYPE" -o "$OPTS" "$NODE" "$TARGET" 2>/dev/null; then
+        # A Linux-formatted stick carries real ownership, and its root is
+        # typically root-owned - which leaves the web apps unable to write to
+        # it. Take just the top directory so files can be created, rather than
+        # recursively rewriting ownership of everything already on the stick.
+        case "$FSTYPE" in
+        ext2 | ext3 | ext4)
+            if ! su -s /bin/sh "#$OWNER_UID" -c "test -w '$TARGET'" 2>/dev/null; then
+                chown "$OWNER_UID:$OWNER_GID" "$TARGET" 2>/dev/null &&
+                    log "$DEV: took ownership of mount root so it is writable"
+            fi
+            ;;
+        esac
+        log "mounted $DEV ($FSTYPE) at $TARGET"
+    else
+        rmdir "$TARGET" 2>/dev/null
+        log "$DEV: mount failed (type $FSTYPE)"
+    fi
+    ;;
+
+remove)
+    # Match on the device udev reports as removed. Testing "has the node
+    # disappeared?" is not enough on its own - some device nodes outlive the
+    # media behind them - so the reported name is the primary signal, with the
+    # vanished-device check kept as a fallback for anything missed. Mounts
+    # belonging to sticks that are still plugged in are left alone.
+    NODE="/dev/$DEV"
+    for m in "$BASE"/*; do
+        [ -d "$m" ] || continue
+        if mountpoint -q "$m" 2>/dev/null; then
+            src=$(findmnt -no SOURCE --target "$m" 2>/dev/null)
+            if [ "$src" = "$NODE" ] || { [ -n "$src" ] && [ ! -e "$src" ]; }; then
+                # Lazy unmount: the stick is physically gone, so waiting on
+                # open file handles would just hang the mountpoint forever.
+                umount -l "$m" 2>/dev/null
+                rmdir "$m" 2>/dev/null
+                log "cleaned up $m (was $src)"
+            fi
+        else
+            rmdir "$m" 2>/dev/null
+        fi
+    done
+    ;;
+esac
+exit 0

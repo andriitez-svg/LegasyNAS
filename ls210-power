@@ -1,0 +1,4 @@
+# Lets the desktop shell (which runs as the unprivileged 'debian' user)
+# restart or shut down the NAS from its System settings. Scoped to exactly
+# these two commands - it is deliberately not a blanket NOPASSWD grant.
+debian ALL=(root) NOPASSWD: /usr/sbin/reboot, /usr/sbin/poweroff

@@ -1,0 +1,19 @@
+[Unit]
+Description=Simple URL Fetcher (name-required download tool)
+After=network.target
+
+[Service]
+Type=simple
+User=debian
+WorkingDirectory=/home/debian
+ExecStart=/usr/bin/python3 /home/debian/fetcher.py
+Restart=on-failure
+RestartSec=5
+# Default KillMode=control-group would kill the detached wget/retry-loop
+# processes too whenever this service restarts (e.g. for a code deploy),
+# interrupting any in-progress download. They're intentionally detached
+# (setsid) precisely so they survive that; process-only kill mode respects it.
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

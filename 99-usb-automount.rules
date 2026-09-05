@@ -1,0 +1,12 @@
+# Auto-mount USB storage into /var/downloads/USB so it shows up in the Files
+# app. Scoped to sd[b-z] (never the internal system disk on sda) and further
+# guarded by ID_BUS=usb.
+#
+# The work is handed to systemd-run rather than executed inline: udev kills
+# long-running RUN commands, and mounting a slow stick can easily exceed that.
+
+SUBSYSTEM=="block", ACTION=="add", KERNEL=="sd[b-z]*", ENV{ID_BUS}=="usb", ENV{ID_FS_USAGE}=="filesystem", RUN+="/usr/bin/systemd-run --no-block /usr/local/sbin/usb-automount add %k"
+
+# No ID_FS_USAGE check on removal - by then the device is gone and udev can no
+# longer probe it for filesystem properties.
+SUBSYSTEM=="block", ACTION=="remove", KERNEL=="sd[b-z]*", ENV{ID_BUS}=="usb", RUN+="/usr/bin/systemd-run --no-block /usr/local/sbin/usb-automount remove %k"
