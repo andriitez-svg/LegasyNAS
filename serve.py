@@ -35,7 +35,7 @@ GLANCES_BASE = "http://127.0.0.1:61208/api/3"
 PORT = int(config("PORT_DESKTOP", "8095"))
 
 # Power actions. This service runs as the unprivileged 'debian' user; a narrow
-# rule in /etc/sudoers.d/ls210-power grants passwordless access to exactly
+# rule in /etc/sudoers.d/nas-control-plane-power grants passwordless access to exactly
 # these two commands and nothing else.
 POWER_ACTIONS = {
     "/system/restart": ("/usr/sbin/reboot", "Restarting"),

@@ -1,12 +1,23 @@
-# Auto-mount USB storage into /var/downloads/USB so it shows up in the Files
-# app. Scoped to sd[b-z] (never the internal system disk on sda) and further
-# guarded by ID_BUS=usb.
+# Auto-mount USB storage into $ROOT_DIR/USB (see /etc/nas-control-plane.conf)
+# so it shows up in the Files app. Matched by ENV{ID_BUS}=="usb" plus a
+# genuinely removable device, rather than by device-name pattern: a
+# sd[b-z]-style KERNEL match never fires on NVMe/eMMC/virtio storage, which
+# silently leaves USB automount dead on that hardware with no visible error.
+#
+# ATTRS{removable} (not ATTR{}) walks up to the parent disk, since a
+# partition node's own sysfs directory has no "removable" file of its own -
+# only the whole-disk device does. It's only checked on "add": by the time a
+# "remove" event fires the device's sysfs attributes are typically already
+# gone, so matching on them there would make the remove rule unreliable.
+# ENV{ID_BUS} is read from udev's own device database instead of sysfs, so it
+# stays available on removal. The shell script re-checks both independently
+# before ever mounting anything, so this rule is a filter, not the only
+# guard.
 #
 # The work is handed to systemd-run rather than executed inline: udev kills
 # long-running RUN commands, and mounting a slow stick can easily exceed that.
 
-SUBSYSTEM=="block", ACTION=="add", KERNEL=="sd[b-z]*", ENV{ID_BUS}=="usb", ENV{ID_FS_USAGE}=="filesystem", RUN+="/usr/bin/systemd-run --no-block /usr/local/sbin/usb-automount add %k"
+SUBSYSTEM=="block", ACTION=="add", ENV{ID_BUS}=="usb", ATTRS{removable}=="1", ENV{ID_FS_USAGE}=="filesystem", RUN+="/usr/bin/systemd-run --no-block /usr/local/sbin/usb-automount add %k"
 
-# No ID_FS_USAGE check on removal - by then the device is gone and udev can no
-# longer probe it for filesystem properties.
-SUBSYSTEM=="block", ACTION=="remove", KERNEL=="sd[b-z]*", ENV{ID_BUS}=="usb", RUN+="/usr/bin/systemd-run --no-block /usr/local/sbin/usb-automount remove %k"
+# No removable/ID_FS_USAGE check on removal - see above.
+SUBSYSTEM=="block", ACTION=="remove", ENV{ID_BUS}=="usb", RUN+="/usr/bin/systemd-run --no-block /usr/local/sbin/usb-automount remove %k"

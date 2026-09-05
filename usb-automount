@@ -36,6 +36,31 @@ add)
     NODE="/dev/$DEV"
     [ -b "$NODE" ] || exit 0
 
+    # Defense in depth: don't rely solely on the udev rule that triggered
+    # this. Refuse anything not independently confirmed as a removable
+    # device on the USB bus - wrongly automounting an internal, non-
+    # removable disk is a far worse failure mode than a USB stick
+    # occasionally needing a manual mount.
+    BUS=$(udevadm info --query=property --name="$NODE" 2>/dev/null | sed -n 's/^ID_BUS=//p')
+    if [ "$BUS" != "usb" ]; then
+        log "$DEV: refusing to mount - not on the USB bus (ID_BUS=${BUS:-unset})"
+        exit 0
+    fi
+    # "removable" lives on the parent whole-disk device for a partition node
+    # (e.g. sdb1's is at .../block/sdb/removable, not .../block/sdb1/), and
+    # sdb1's own sysfs directory is a child of sdb's - so ".." from it is
+    # exactly the parent disk, with no separate lookup needed.
+    CLASS_PATH="/sys/class/block/$DEV"
+    if [ -f "$CLASS_PATH/partition" ]; then
+        REMOVABLE=$(cat "$CLASS_PATH/../removable" 2>/dev/null)
+    else
+        REMOVABLE=$(cat "$CLASS_PATH/removable" 2>/dev/null)
+    fi
+    if [ "$REMOVABLE" != "1" ]; then
+        log "$DEV: refusing to mount - not marked removable"
+        exit 0
+    fi
+
     FSTYPE=$(blkid -o value -s TYPE "$NODE" 2>/dev/null)
     LABEL=$(blkid -o value -s LABEL "$NODE" 2>/dev/null)
     UUID=$(blkid -o value -s UUID "$NODE" 2>/dev/null)

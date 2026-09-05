@@ -19,4 +19,29 @@ Pulled fresh from the live NAS (root@192.168.8.110) on 2026-09-05. See
   needs generalizing in a later phase (hardcoded `/home/debian` install path).
 - `smb.conf`'s `netbios name = LS210` / `server string = LS210 NAS` are
   additional LS210-branded strings not covered by the current plan's desktop
-  shell renaming — worth folding into the Phase 2 branding pass.
+  shell renaming. Still not touched as of Phase 3 - deliberately left alone,
+  since renaming a live NAS's NetBIOS identity changes how it appears on the
+  network (saved bookmarks, network browsing), which is a user-visible change
+  beyond a source refactor. Flag to the user before changing it.
+
+## Phase 3 update
+
+- `ls210-power` (the static sudoers file captured in the Phase 0 baseline) is
+  superseded by `install.sh`'s `install_power_sudoers`, which resolves the
+  real reboot/poweroff paths via `command -v`, generates
+  `/etc/sudoers.d/nas-control-plane-power`, and validates it with
+  `visudo -c -f` before ever installing it. The old file has been removed
+  from both the live NAS and this repo - `visudo -c` and a live `sudo -n
+  reboot --help` were both re-checked after removing it.
+- USB automount's `add` path now independently re-checks `ID_BUS=="usb"` and
+  a genuinely-removable parent disk (via `udevadm info` + sysfs) before ever
+  mounting anything, on top of the udev rule's own matching - verified
+  end-to-end with a real USB stick (mounted correctly, writable, picked up
+  the right icon in the Files app) and confirmed to correctly refuse both
+  the internal disk and a non-USB loopback device.
+- The removal path itself is unchanged from Phase 1 (already tested via
+  loopback there); what changed in Phase 3 is only the udev rule's remove-
+  side match (`ENV{ID_BUS}=="usb"` alone, since sysfs attributes like
+  `removable` are typically already gone by the time a remove event fires).
+  This was not re-verified against a real physical unplug in this session -
+  worth confirming next time a stick is actually removed.
