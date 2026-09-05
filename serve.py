@@ -3,6 +3,7 @@ import http.server
 import socketserver
 import subprocess
 import os
+import json
 import urllib.request
 import urllib.error
 
@@ -50,6 +51,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         super().end_headers()
 
     def do_GET(self):
+        if self.path == "/api/config":
+            # Lets desktop.html build the Files/Fetcher iframe URLs from
+            # wherever it's actually being loaded from, instead of a
+            # hardcoded host+port baked into the page.
+            body = json.dumps({
+                "port_files": int(config("PORT_FILES", "8093")),
+                "port_fetcher": int(config("PORT_FETCHER", "8092")),
+                "data_mount": config("DATA_MOUNT", "/mnt/data"),
+            }).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.startswith("/glances/"):
             endpoint = self.path[len("/glances/"):]
             try:
@@ -81,7 +97,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # reboot the NAS. Demanding a custom header forces a preflight, and
         # this server sends no CORS headers, so the browser refuses it. The
         # desktop's own same-origin fetch sets the header and passes.
-        if self.headers.get("X-LS210-Confirm") != "yes":
+        if self.headers.get("X-NASCP-Confirm") != "yes":
             self.send_error(403, "Missing confirmation header")
             return
 

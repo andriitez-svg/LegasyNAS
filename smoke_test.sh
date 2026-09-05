@@ -35,6 +35,9 @@ check "Fetcher UI responds" 200 \
 check "Desktop shell responds" 200 \
     http_code "http://$HOST:8095/desktop.html"
 
+check "Desktop shell exposes its config to the client" 200 \
+    http_code "http://$HOST:8095/api/config"
+
 check "Glances proxy responds" 200 \
     http_code "http://$HOST:8095/glances/cpu"
 
