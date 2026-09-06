@@ -7,6 +7,7 @@ import json
 import hashlib
 import hmac
 import time
+import secrets
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -59,22 +60,27 @@ def _load_auth_file():
         pass
     return cfg
 
-_AUTH = _load_auth_file()
-AUTH_ENABLED = bool(_AUTH.get("AUTH_HASH"))
+# Read fresh on every call rather than cached at startup - this is what lets
+# a password change made through this service take effect on the other two
+# (filemanager.py, fetcher.py) immediately, with no restart needed.
+def auth_enabled():
+    return bool(_load_auth_file().get("AUTH_HASH"))
+
 SESSION_COOKIE = "nascp_session"
 SESSION_LIFETIME = 60 * 60 * 24 * 14  # 14 days
 
-def _sign(expiry):
+def _sign(expiry, auth):
     # Session "tokens" are self-verifying (expiry + HMAC of that expiry using
     # a secret shared by all three services), not looked up in a store - the
     # three services are independent processes with no shared memory, and a
     # signed value lets each one verify a cookie set by either of the others
     # with no IPC or shared file to keep in sync on every request.
-    return hmac.new(_AUTH.get("AUTH_SECRET", "").encode(), str(expiry).encode(), hashlib.sha256).hexdigest()
+    return hmac.new(auth.get("AUTH_SECRET", "").encode(), str(expiry).encode(), hashlib.sha256).hexdigest()
 
 def make_session_cookie():
+    auth = _load_auth_file()
     expiry = int(time.time()) + SESSION_LIFETIME
-    return f"{expiry}.{_sign(expiry)}"
+    return f"{expiry}.{_sign(expiry, auth)}"
 
 def verify_session_cookie(value):
     if not value or "." not in value:
@@ -86,15 +92,16 @@ def verify_session_cookie(value):
         return False
     if expiry < time.time():
         return False
-    return hmac.compare_digest(sig, _sign(expiry))
+    return hmac.compare_digest(sig, _sign(expiry, _load_auth_file()))
 
-def check_password(password):
+def check_password(password, auth=None):
+    auth = auth if auth is not None else _load_auth_file()
     try:
-        salt = bytes.fromhex(_AUTH.get("AUTH_SALT", ""))
+        salt = bytes.fromhex(auth.get("AUTH_SALT", ""))
     except ValueError:
         return False
     computed = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 200000).hex()
-    return hmac.compare_digest(computed, _AUTH.get("AUTH_HASH", ""))
+    return hmac.compare_digest(computed, auth.get("AUTH_HASH", ""))
 
 def get_cookie(handler, name):
     header = handler.headers.get("Cookie", "")
@@ -105,7 +112,7 @@ def get_cookie(handler, name):
     return None
 
 def is_authenticated(handler):
-    if not AUTH_ENABLED:
+    if not auth_enabled():
         return True
     return verify_session_cookie(get_cookie(handler, SESSION_COOKIE))
 
@@ -121,18 +128,24 @@ button{{width:100%;padding:10px;margin-top:8px;background:#2E9B95;color:#fff;bor
 border-radius:8px;font-size:14px;font-weight:600;cursor:pointer}}
 button:hover{{background:#278a85}}
 .err{{color:#c0392b;font-size:13px;margin-bottom:4px}}
+.info{{color:#2E9B95;font-size:13px;margin-bottom:4px}}
 </style>
 <form method="POST" action="/login">
 <h2>Sign in</h2>
-{error}
+{message}
 <input name="username" placeholder="Username" autocomplete="username" autofocus>
 <input name="password" type="password" placeholder="Password" autocomplete="current-password">
 <button type="submit">Sign in</button>
 </form>"""
 
-def send_login_page(handler, failed=False):
-    error_html = '<div class="err">Incorrect username or password.</div>' if failed else ""
-    body = LOGIN_PAGE.format(error=error_html).encode()
+def send_login_page(handler, failed=False, info=""):
+    if failed:
+        message = '<div class="err">Incorrect username or password.</div>'
+    elif info:
+        message = f'<div class="info">{info}</div>'
+    else:
+        message = ""
+    body = LOGIN_PAGE.format(message=message).encode()
     handler.send_response(200)
     handler.send_header("Content-Type", "text/html; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
@@ -145,7 +158,8 @@ def handle_login_post(handler):
     fields = urllib.parse.parse_qs(body)
     username = fields.get("username", [""])[0]
     password = fields.get("password", [""])[0]
-    ok = hmac.compare_digest(username, _AUTH.get("AUTH_USER", "")) and check_password(password)
+    auth = _load_auth_file()
+    ok = hmac.compare_digest(username, auth.get("AUTH_USER", "")) and check_password(password, auth)
     if not ok:
         time.sleep(1)  # slow down automated guessing
         send_login_page(handler, failed=True)
@@ -161,6 +175,60 @@ def handle_login_post(handler):
         f"{SESSION_COOKIE}={cookie}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_LIFETIME}")
     handler.send_header("Content-Length", "0")
     handler.end_headers()
+
+def handle_change_password_post(handler):
+    if not is_authenticated(handler):
+        handler.send_error(401)
+        return
+    length = int(handler.headers.get("Content-Length", 0) or 0)
+    body = handler.rfile.read(length).decode("utf-8", "replace")
+    fields = urllib.parse.parse_qs(body)
+    current = fields.get("current_password", [""])[0]
+    new = fields.get("new_password", [""])[0]
+    confirm = fields.get("new_password_confirm", [""])[0]
+    auth = _load_auth_file()
+
+    def respond(ok, error=""):
+        payload = json.dumps({"ok": ok, "error": error}).encode()
+        handler.send_response(200)
+        handler.send_header("Content-Type", "application/json")
+        handler.send_header("Content-Length", str(len(payload)))
+        handler.end_headers()
+        handler.wfile.write(payload)
+
+    if not check_password(current, auth):
+        time.sleep(1)
+        respond(False, "Current password is incorrect.")
+        return
+    if len(new) < 8:
+        respond(False, "New password must be at least 8 characters.")
+        return
+    if new != confirm:
+        respond(False, "New passwords don't match.")
+        return
+
+    salt = secrets.token_bytes(16)
+    new_hash = hashlib.pbkdf2_hmac("sha256", new.encode(), salt, 200000).hex()
+    # Rotating the secret invalidates every session everywhere (including
+    # this one) - standard practice after a password change, and harmless
+    # here since the client redirects to /logout right after a success.
+    new_secret = secrets.token_hex(32)
+    lines = [
+        "# Login credentials for the web apps. To change these from the",
+        "# command line instead, delete this file and re-run install.sh.",
+        f"AUTH_USER={auth.get('AUTH_USER', '')}",
+        f"AUTH_SALT={salt.hex()}",
+        f"AUTH_HASH={new_hash}",
+        f"AUTH_SECRET={new_secret}",
+        "",
+    ]
+    # Not a temp-file-then-rename: this process owns the file itself (0600)
+    # but not the /etc directory entry, so an atomic rename would need
+    # permissions it doesn't have. A plain in-place rewrite of a few dozen
+    # bytes is an acceptable tradeoff for a home-NAS password file.
+    with open(AUTH_FILE, "w") as f:
+        f.write("\n".join(lines))
+    respond(True)
 
 # Power actions. This service runs as the unprivileged 'debian' user; a narrow
 # rule in /etc/sudoers.d/nas-control-plane-power grants passwordless access to exactly
@@ -201,7 +269,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 "port_files": int(config("PORT_FILES", "8093")),
                 "port_fetcher": int(config("PORT_FETCHER", "8092")),
                 "data_mount": config("DATA_MOUNT", "/mnt/data"),
-                "auth_enabled": AUTH_ENABLED,
+                "auth_enabled": auth_enabled(),
             }).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -232,6 +300,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/login":
             handle_login_post(self)
+            return
+        if self.path == "/change-password":
+            handle_change_password_post(self)
             return
         if not is_authenticated(self):
             self.send_error(401)

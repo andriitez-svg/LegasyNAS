@@ -117,3 +117,39 @@ Pulled fresh from the live NAS (root@192.168.8.110) on 2026-09-05. See
   generated hash/salt/secret were verified against the live
   `/etc/nas-control-plane-auth.conf` (0600, owned by `debian`, no plaintext
   password present).
+
+## Post-Phase-4: change password from the GUI (user-requested follow-up)
+
+- User pointed out there was no way to change the password without SSH
+  access and re-running `install.sh`. Added a "Change password" control to
+  the Security panel (`POST /change-password` on serve.py, since that's
+  where the GUI lives).
+- This required a real architectural fix first: all three services were
+  caching the auth file's contents once at process startup, so a password
+  changed through serve.py wouldn't have been noticed by filemanager.py/
+  fetcher.py until they were restarted. Switched all three to read
+  `/etc/nas-control-plane-auth.conf` fresh on every auth-related call
+  instead - the file is tiny and requests to this box are infrequent, so
+  the extra file read per request is negligible, and it closes a whole
+  class of "the three services disagree about who's allowed in" bugs, not
+  just this one.
+- Changing the password rotates `AUTH_SECRET` too, which invalidates every
+  outstanding session cookie everywhere (including the one used to submit
+  the change) - standard practice after a password change. The client
+  redirects to `/logout` right after a successful change to tidy up the
+  now-dead cookie and land back on the sign-in page.
+- The write itself is a direct in-place rewrite of the existing file, not a
+  temp-file-then-atomic-rename - the service account owns the *file*
+  (mode 0600) but not the `/etc` *directory* entry, so creating a new
+  temp file there to rename into place would fail. A plain rewrite of a
+  few dozen bytes was judged an acceptable tradeoff over engineering true
+  atomicity for a home-NAS password file; a failure mid-write leaves
+  `AUTH_HASH` missing, which fails safe (auth just turns back off) rather
+  than locking anyone out or leaving a corrupt-but-accepted state.
+- Verified directly against the live NAS (not just locally): logged in,
+  changed the password to a temporary value via `curl`, confirmed the old
+  password stopped working and the temp one worked, confirmed the auth
+  file's ownership/permissions were unchanged after the in-place rewrite,
+  then changed it back to the user's original password and reconfirmed
+  that works - the live NAS ends this session with the same credentials
+  the user originally chose.

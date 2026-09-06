@@ -298,6 +298,14 @@ body{
 .sec-row b{ font-weight:600; color:var(--text); text-align:right; }
 .sec-open{ color:var(--warn) !important; }
 .sec-ok{ color:var(--good) !important; }
+.sec-pw-input{
+  width:100%; box-sizing:border-box; padding:8px 10px; font-size:12.5px;
+  border-radius:7px; border:1px solid var(--dock-line); background:var(--pill-bg);
+  color:var(--text); font-family:inherit;
+}
+.sec-pw-msg{ font-size:11.5px; }
+.sec-pw-msg.error{ color:var(--critical); }
+.sec-pw-msg.success{ color:var(--good); }
 
 /* Wallpaper swatches: more per row so each one is small and the picker stops
    dominating the panel. */
@@ -470,7 +478,20 @@ body{
   <div class="sys-note" id="sec-note">Anyone on your home network can read and
   change files. That is fine for a trusted home network; it would not be safe
   to expose this NAS to the internet as it stands.</div>
-  <button class="icon-pill" id="sec-logout-btn" hidden style="margin-top:10px;">Log out</button>
+  <div id="sec-auth-controls" hidden style="display:flex;gap:8px;margin-top:10px;">
+    <button class="sys-btn" id="sec-changepw-btn">Change password</button>
+    <button class="sys-btn" id="sec-logout-btn">Log out</button>
+  </div>
+  <form id="sec-changepw-form" hidden style="margin-top:10px;display:flex;flex-direction:column;gap:8px;">
+    <input class="sec-pw-input" type="password" name="current_password" placeholder="Current password" autocomplete="current-password" required>
+    <input class="sec-pw-input" type="password" name="new_password" placeholder="New password (min 8 characters)" autocomplete="new-password" minlength="8" required>
+    <input class="sec-pw-input" type="password" name="new_password_confirm" placeholder="Confirm new password" autocomplete="new-password" minlength="8" required>
+    <div class="sec-pw-msg" id="sec-changepw-msg" hidden></div>
+    <div style="display:flex;gap:8px;">
+      <button class="sys-btn" type="submit">Save new password</button>
+      <button class="sys-btn" type="button" id="sec-changepw-cancel">Cancel</button>
+    </div>
+  </form>
  </details>
 </div>
 
@@ -541,7 +562,7 @@ body{
       $("sec-note").textContent = "A login is required to reach the Files app, "
         + "Fetcher, or this shell. File sharing (SMB) is unaffected by this - "
         + "it has no separate login of its own.";
-      $("sec-logout-btn").hidden = false;
+      $("sec-auth-controls").hidden = false;
     }
   }
 
@@ -837,6 +858,55 @@ body{
   // Set-Cookie, so logging out means actually asking the server to do that.
   $("sec-logout-btn").addEventListener("click", function(){
     location.href = "/logout";
+  });
+  $("sec-changepw-btn").addEventListener("click", function(){
+    $("sec-auth-controls").hidden = true;
+    $("sec-changepw-form").hidden = false;
+  });
+  $("sec-changepw-cancel").addEventListener("click", function(){
+    $("sec-changepw-form").reset();
+    $("sec-changepw-msg").hidden = true;
+    $("sec-changepw-form").hidden = true;
+    $("sec-auth-controls").hidden = false;
+  });
+  $("sec-changepw-form").addEventListener("submit", function(e){
+    e.preventDefault();
+    var form = e.target;
+    var msg = $("sec-changepw-msg");
+    var newPw = form.new_password.value;
+    if(newPw !== form.new_password_confirm.value){
+      msg.textContent = "New passwords don't match.";
+      msg.className = "sec-pw-msg error";
+      msg.hidden = false;
+      return;
+    }
+    var body = new URLSearchParams({
+      current_password: form.current_password.value,
+      new_password: newPw,
+      new_password_confirm: form.new_password_confirm.value
+    });
+    fetch("/change-password", { method: "POST", body: body })
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        if(res.ok){
+          msg.textContent = "Password changed - signing you out...";
+          msg.className = "sec-pw-msg success";
+          msg.hidden = false;
+          // The secret rotates on a password change, which invalidates
+          // every outstanding session (including this one) - /logout just
+          // tidies up the now-dead cookie and lands back on sign-in.
+          setTimeout(function(){ location.href = "/logout"; }, 1200);
+        } else {
+          msg.textContent = res.error || "Could not change the password.";
+          msg.className = "sec-pw-msg error";
+          msg.hidden = false;
+        }
+      })
+      .catch(function(){
+        msg.textContent = "Request failed - is the Desktop shell still running?";
+        msg.className = "sec-pw-msg error";
+        msg.hidden = false;
+      });
   });
   $("sys-confirm-no").addEventListener("click", function(){
     pendingAction = null;

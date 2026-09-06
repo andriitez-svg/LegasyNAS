@@ -62,22 +62,28 @@ def _load_auth_file():
         pass
     return cfg
 
-_AUTH = _load_auth_file()
-AUTH_ENABLED = bool(_AUTH.get("AUTH_HASH"))
+# Read fresh on every call rather than cached at startup - this is what lets
+# a password change made through serve.py (the only one of the three with a
+# change-password control) take effect here immediately, with no restart
+# needed.
+def auth_enabled():
+    return bool(_load_auth_file().get("AUTH_HASH"))
+
 SESSION_COOKIE = "nascp_session"
 SESSION_LIFETIME = 60 * 60 * 24 * 14  # 14 days
 
-def _sign(expiry):
+def _sign(expiry, auth):
     # Session "tokens" are self-verifying (expiry + HMAC of that expiry using
     # a secret shared by all three services), not looked up in a store - the
     # three services are independent processes with no shared memory, and a
     # signed value lets each one verify a cookie set by either of the others
     # with no IPC or shared file to keep in sync on every request.
-    return hmac.new(_AUTH.get("AUTH_SECRET", "").encode(), str(expiry).encode(), hashlib.sha256).hexdigest()
+    return hmac.new(auth.get("AUTH_SECRET", "").encode(), str(expiry).encode(), hashlib.sha256).hexdigest()
 
 def make_session_cookie():
+    auth = _load_auth_file()
     expiry = int(time.time()) + SESSION_LIFETIME
-    return f"{expiry}.{_sign(expiry)}"
+    return f"{expiry}.{_sign(expiry, auth)}"
 
 def verify_session_cookie(value):
     if not value or "." not in value:
@@ -89,15 +95,16 @@ def verify_session_cookie(value):
         return False
     if expiry < time.time():
         return False
-    return hmac.compare_digest(sig, _sign(expiry))
+    return hmac.compare_digest(sig, _sign(expiry, _load_auth_file()))
 
-def check_password(password):
+def check_password(password, auth=None):
+    auth = auth if auth is not None else _load_auth_file()
     try:
-        salt = bytes.fromhex(_AUTH.get("AUTH_SALT", ""))
+        salt = bytes.fromhex(auth.get("AUTH_SALT", ""))
     except ValueError:
         return False
     computed = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 200000).hex()
-    return hmac.compare_digest(computed, _AUTH.get("AUTH_HASH", ""))
+    return hmac.compare_digest(computed, auth.get("AUTH_HASH", ""))
 
 def get_cookie(handler, name):
     header = handler.headers.get("Cookie", "")
@@ -108,7 +115,7 @@ def get_cookie(handler, name):
     return None
 
 def is_authenticated(handler):
-    if not AUTH_ENABLED:
+    if not auth_enabled():
         return True
     return verify_session_cookie(get_cookie(handler, SESSION_COOKIE))
 
@@ -148,7 +155,8 @@ def handle_login_post(handler):
     fields = urllib.parse.parse_qs(body)
     username = fields.get("username", [""])[0]
     password = fields.get("password", [""])[0]
-    ok = hmac.compare_digest(username, _AUTH.get("AUTH_USER", "")) and check_password(password)
+    auth = _load_auth_file()
+    ok = hmac.compare_digest(username, auth.get("AUTH_USER", "")) and check_password(password, auth)
     if not ok:
         time.sleep(1)  # slow down automated guessing
         send_login_page(handler, failed=True)
