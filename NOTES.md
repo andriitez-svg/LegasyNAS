@@ -39,9 +39,10 @@ Pulled fresh from the live NAS (root@192.168.8.110) on 2026-09-05. See
   end-to-end with a real USB stick (mounted correctly, writable, picked up
   the right icon in the Files app) and confirmed to correctly refuse both
   the internal disk and a non-USB loopback device.
-- The removal path itself is unchanged from Phase 1 (already tested via
-  loopback there); what changed in Phase 3 is only the udev rule's remove-
-  side match (`ENV{ID_BUS}=="usb"` alone, since sysfs attributes like
-  `removable` are typically already gone by the time a remove event fires).
-  This was not re-verified against a real physical unplug in this session -
-  worth confirming next time a stick is actually removed.
+- The removal path (udev rule's `ENV{ID_BUS}=="usb"`-only remove match, plus
+  usb-automount's unchanged-from-Phase-1 cleanup logic) has now also been
+  confirmed against a real physical unplug: `journalctl -t usb-automount`
+  shows `cleaned up /var/downloads/USB/Z (was /dev/sdb1)` immediately after
+  the stick came out, and `/var/downloads/USB/` was back to empty. The full
+  add-then-remove lifecycle is verified end-to-end through the real hotplug
+  path, not simulated. No open items remain from Phase 3.
