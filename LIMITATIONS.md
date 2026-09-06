@@ -3,11 +3,16 @@
 Running list, appended to as generalization work proceeds. Promoted into the
 final README in Phase 5.
 
-- **No authentication.** The Files app, Fetcher, Desktop shell, and the SMB
-  share are all open on the LAN with no login. This is a deliberate tradeoff
-  for a trusted home network, not an oversight — but it means this must never
-  be exposed to the internet or port-forwarded. Adding real auth is out of
-  scope for this generalization effort.
+- **Login is opt-in and off by default.** `install.sh` can set up a
+  username/password for the Files app, Fetcher, and the Desktop shell
+  (a shared, cross-port session cookie - log in once via any of the three,
+  and the others recognize the same session, since cookies aren't scoped by
+  port). Skip that prompt and everything stays exactly as open as before.
+  Either way, none of this should ever be exposed to the internet or
+  port-forwarded - the login exists to keep other people on the same LAN
+  out, not to make internet exposure safe.
+- **The SMB share has no login of its own**, regardless of whether the web
+  apps' login is enabled - enabling one does not enable the other.
 - **No sleep/suspend mode.** Investigated and found infeasible on the
   original hardware (no wake-on-LAN, broken CPU idle states, drive has no
   APM support) and deliberately not pursued further.

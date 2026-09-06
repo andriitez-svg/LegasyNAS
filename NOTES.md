@@ -71,3 +71,49 @@ Pulled fresh from the live NAS (root@192.168.8.110) on 2026-09-05. See
   duplicate units, sudoers entries, or udev rules; checksums of the
   redeployed app files matched every prior phase's recorded values exactly,
   i.e. no drift was introduced).
+
+## Post-Phase-4: optional login (user-requested, beyond the original 5-phase plan)
+
+- Added a shared login gate across all three services. Session "tokens" are
+  self-verifying (expiry + HMAC of that expiry, signed with a secret shared
+  by all three via `/etc/nas-control-plane-auth.conf`) rather than stored in
+  a session table, because the three Python processes are independent with
+  no shared memory - a signed value lets each one verify a cookie set by
+  either of the others with no IPC needed. Verified this actually works
+  end-to-end: logging in against serve.py alone produced a cookie that
+  filemanager.py and fetcher.py - never logged into directly - both accepted.
+- Password is never stored - only a PBKDF2-SHA256 hash (200k iterations) +
+  random salt, in a file mode 0600 owned by the service account (not even
+  world-readable). Login itself is throttled with a 1-second sleep on a
+  failed attempt.
+- Auth defaults to off and stays off until `install.sh`'s new `install_auth`
+  step actually creates the credentials file - confirmed via a real
+  before/after deploy: pushed the auth-aware code first with no auth file
+  present and re-ran the full smoke test to prove zero behavior change,
+  *then* ran `install_auth` to actually turn it on.
+- **Real bug found via live testing, not just written and assumed correct**:
+  the original "Log out" button tried to clear the session cookie with
+  `document.cookie` from page script. That cannot work - `HttpOnly` (set
+  deliberately so an XSS bug can't steal the session either) blocks script
+  from clearing the cookie, not just reading it. The user tested this in
+  their real browser twice: first confirming it was actually broken (not a
+  quirk of my own sandboxed test browser, which has separate, unrelated
+  limitations with cross-origin iframes noted earlier), then confirming the
+  fix - a genuine `/logout` endpoint that clears the cookie via a real
+  `Set-Cookie` response header - actually works.
+- Also fixed while wiring this up: `serve.py`'s login redirect originally
+  sent the browser to `/`, which - unlike `filemanager.py`/`fetcher.py` -
+  this service has no handler for, so it fell through to
+  `SimpleHTTPRequestHandler`'s raw directory listing instead of the desktop
+  shell. Redirects to `/desktop.html` now.
+- `smoke_test.sh` gained login-aware checks (`NAS_CP_TEST_USER`/
+  `NAS_CP_TEST_PASSWORD`): if set, it logs in first and carries the cookie
+  through every other check, and adds two auth-specific assertions
+  (unauthenticated request is gated; login on one port authenticates a
+  different one). Without those env vars it behaves exactly as before, for
+  testing a NAS with login left off.
+- Live NAS now has login enabled (credentials chosen by the user, not
+  recorded here), set via `install.sh`'s interactive/env-var flow. The
+  generated hash/salt/secret were verified against the live
+  `/etc/nas-control-plane-auth.conf` (0600, owned by `debian`, no plaintext
+  password present).

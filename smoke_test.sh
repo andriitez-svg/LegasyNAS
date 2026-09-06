@@ -5,10 +5,19 @@
 #
 # Usage: ./smoke_test.sh [host]   (defaults to localhost - pass a hostname
 # or IP to test a NAS remotely instead of running this on the box itself)
+#
+# If a login is configured, set NAS_CP_TEST_USER and NAS_CP_TEST_PASSWORD so
+# this can log in first and carry the session cookie through every other
+# check - otherwise every check below would just see a 200 login page
+# instead of real content and (wrongly) still say PASS, since they only look
+# at status codes.
 
 set -u
 HOST="${1:-localhost}"
 FAIL=0
+COOKIE_JAR=""
+cleanup() { [ -n "$COOKIE_JAR" ] && rm -f "$COOKIE_JAR"; }
+trap cleanup EXIT
 
 check() {
     desc="$1"; expected="$2"; shift 2
@@ -22,10 +31,37 @@ check() {
 }
 
 http_code() {
-    curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$@"
+    if [ -n "$COOKIE_JAR" ]; then
+        curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE_JAR" --max-time 5 "$@"
+    else
+        curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$@"
+    fi
+}
+
+body_contains() {
+    needle="$1"; shift
+    if [ -n "$COOKIE_JAR" ]; then
+        curl -s -b "$COOKIE_JAR" --max-time 5 "$@" | grep -qF "$needle" && echo yes || echo no
+    else
+        curl -s --max-time 5 "$@" | grep -qF "$needle" && echo yes || echo no
+    fi
 }
 
 echo "=== Smoke test against $HOST ==="
+
+if [ -n "${NAS_CP_TEST_USER:-}" ] && [ -n "${NAS_CP_TEST_PASSWORD:-}" ]; then
+    check "Unauthenticated request is gated behind login" yes \
+        body_contains "Sign in" "http://$HOST:8093/"
+
+    COOKIE_JAR=$(mktemp)
+    curl -s -c "$COOKIE_JAR" -X POST \
+        --data-urlencode "username=$NAS_CP_TEST_USER" \
+        --data-urlencode "password=$NAS_CP_TEST_PASSWORD" \
+        "http://$HOST:8095/login" -o /dev/null
+
+    check "Login succeeds and the session works on a different port" yes \
+        body_contains '"port_files"' "http://$HOST:8095/api/config"
+fi
 
 check "Files app root listing responds" 200 \
     http_code "http://$HOST:8093/"

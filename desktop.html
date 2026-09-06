@@ -465,11 +465,12 @@ body{
   <summary class="settings-head">Security</summary>
   <div class="sec-row"><span>Reachable from</span><b>Home network only</b></div>
   <div class="sec-row"><span>File sharing (SMB)</span><b class="sec-open">Open &mdash; no password</b></div>
-  <div class="sec-row"><span>Web apps</span><b class="sec-open">Open &mdash; no password</b></div>
+  <div class="sec-row"><span>Web apps</span><b class="sec-open" id="sec-webapps-status">Open &mdash; no password</b></div>
   <div class="sec-row"><span>Internet access</span><b class="sec-ok">Not exposed</b></div>
-  <div class="sys-note">Anyone on your home network can read and change files.
-  That is fine for a trusted home network; it would not be safe to expose this
-  NAS to the internet as it stands.</div>
+  <div class="sys-note" id="sec-note">Anyone on your home network can read and
+  change files. That is fine for a trusted home network; it would not be safe
+  to expose this NAS to the internet as it stands.</div>
+  <button class="icon-pill" id="sec-logout-btn" hidden style="margin-top:10px;">Log out</button>
  </details>
 </div>
 
@@ -533,6 +534,14 @@ body{
     if(cfg.data_mount){
       DATA_MOUNT = cfg.data_mount;
       FRIENDLY_MOUNT_NAMES[DATA_MOUNT] = "Data storage";
+    }
+    if(cfg.auth_enabled){
+      $("sec-webapps-status").textContent = "Login required";
+      $("sec-webapps-status").className = "sec-ok";
+      $("sec-note").textContent = "A login is required to reach the Files app, "
+        + "Fetcher, or this shell. File sharing (SMB) is unaffected by this - "
+        + "it has no separate login of its own.";
+      $("sec-logout-btn").hidden = false;
     }
   }
 
@@ -822,6 +831,13 @@ body{
   }
   $("sys-restart").addEventListener("click", function(){ armPower("restart"); });
   $("sys-shutdown").addEventListener("click", function(){ armPower("shutdown"); });
+  // The session cookie is HttpOnly precisely so page script can't read OR
+  // clear it (an XSS bug then can't hijack *or* invalidate a session
+  // either) - only a real response from the server can remove it via
+  // Set-Cookie, so logging out means actually asking the server to do that.
+  $("sec-logout-btn").addEventListener("click", function(){
+    location.href = "/logout";
+  });
   $("sys-confirm-no").addEventListener("click", function(){
     pendingAction = null;
     $("sys-confirm").hidden = true;
