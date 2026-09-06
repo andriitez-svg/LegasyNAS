@@ -119,18 +119,32 @@ def is_authenticated(handler):
         return True
     return verify_session_cookie(get_cookie(handler, SESSION_COOKIE))
 
+# Same palette the Desktop shell's own dark/light theme uses (see
+# desktop.html's :root[data-theme] blocks) - kept in sync by eye since this
+# is a plain string template, not shared CSS.
+LOGIN_COLORS = {
+    "light": {
+        "page_bg": "#dff4f1", "card_bg": "#ffffff", "text": "#1f2b2a",
+        "input_bg": "#ffffff", "input_border": "#ccc", "shadow": "rgba(0,0,0,.12)",
+    },
+    "dark": {
+        "page_bg": "#16211f", "card_bg": "#212c2a", "text": "#E7EDEC",
+        "input_bg": "#293532", "input_border": "#3a4644", "shadow": "rgba(0,0,0,.45)",
+    },
+}
+
 LOGIN_PAGE = """<!doctype html><meta charset="utf-8"><title>Sign in</title>
 <style>
-body{{font-family:-apple-system,system-ui,sans-serif;background:#dff4f1;display:flex;
+body{{font-family:-apple-system,system-ui,sans-serif;background:{page_bg};display:flex;
 align-items:center;justify-content:center;height:100vh;margin:0}}
-form{{background:#fff;padding:32px;border-radius:14px;box-shadow:0 8px 28px rgba(0,0,0,.12);width:280px}}
-h2{{margin:0 0 16px;color:#1f2b2a}}
-input{{width:100%;box-sizing:border-box;padding:10px;margin:6px 0;border:1px solid #ccc;
-border-radius:8px;font-size:14px}}
+form{{background:{card_bg};padding:32px;border-radius:14px;box-shadow:0 8px 28px {shadow};width:280px}}
+h2{{margin:0 0 16px;color:{text}}}
+input{{width:100%;box-sizing:border-box;padding:10px;margin:6px 0;border:1px solid {input_border};
+border-radius:8px;font-size:14px;background:{input_bg};color:{text}}}
 button{{width:100%;padding:10px;margin-top:8px;background:#2E9B95;color:#fff;border:0;
 border-radius:8px;font-size:14px;font-weight:600;cursor:pointer}}
 button:hover{{background:#278a85}}
-.err{{color:#c0392b;font-size:13px;margin-bottom:4px}}
+.err{{color:#D8564A;font-size:13px;margin-bottom:4px}}
 </style>
 <form method="POST" action="/login">
 <h2>Sign in</h2>
@@ -142,7 +156,11 @@ button:hover{{background:#278a85}}
 
 def send_login_page(handler, failed=False):
     error_html = '<div class="err">Incorrect username or password.</div>' if failed else ""
-    body = LOGIN_PAGE.format(error=error_html).encode()
+    # Dark is the standard now, same as the Desktop shell itself - "light"
+    # only shows up here if that's what the ls_theme cookie explicitly says
+    # (set by the shell, and readable here since cookies aren't port-scoped).
+    theme = "light" if get_cookie(handler, "ls_theme") == "light" else "dark"
+    body = LOGIN_PAGE.format(error=error_html, **LOGIN_COLORS[theme]).encode()
     handler.send_response(200)
     handler.send_header("Content-Type", "text/html; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))

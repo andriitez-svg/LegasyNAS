@@ -70,7 +70,7 @@ body{
 /* ---------- wallpaper ---------- */
 #wallpaper{
   position:fixed; inset:0; z-index:0;
-  background: var(--wp, linear-gradient(160deg, #dff4f1 0%, #bfe6e0 45%, #a7d8d2 100%));
+  background: var(--wp, linear-gradient(200deg, #1f2b2a 0%, #2c3e3c 55%, #3a524f 100%));
   background-size:cover; background-position:center;
   transition:background 0.4s ease;
 }
@@ -619,7 +619,7 @@ body{
     }catch(e){}
   }
   function saveTheme(v){ try{ localStorage.setItem(LS_THEME, v); }catch(e){} setCookie("ls_theme", v); }
-  function loadTheme(){ try{ return localStorage.getItem(LS_THEME) || "light"; }catch(e){ return "light"; } }
+  function loadTheme(){ try{ return localStorage.getItem(LS_THEME) || "dark"; }catch(e){ return "dark"; } }
   function saveAccent(i){ try{ localStorage.setItem(LS_ACCENT, String(i)); }catch(e){} setCookie("ls_accent", ACCENTS[i].strong); }
   function loadAccent(){
     try{
