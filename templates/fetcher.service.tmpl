@@ -4,10 +4,10 @@ After=network.target
 
 [Service]
 Type=simple
-User=debian
-WorkingDirectory=/home/debian
+User=@SERVICE_USER@
+WorkingDirectory=@INSTALL_DIR@
 EnvironmentFile=-/etc/nas-control-plane.conf
-ExecStart=/usr/bin/python3 /home/debian/fetcher.py
+ExecStart=/usr/bin/python3 @INSTALL_DIR@/fetcher.py
 Restart=on-failure
 RestartSec=5
 # Default KillMode=control-group would kill the detached wget/retry-loop

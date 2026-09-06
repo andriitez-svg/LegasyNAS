@@ -3,10 +3,11 @@
 # deploy - it's the only safety net available with no CI and no second
 # device to test against. Exits non-zero on the first failure.
 #
-# Usage: ./smoke_test.sh [host]   (defaults to the live NAS)
+# Usage: ./smoke_test.sh [host]   (defaults to localhost - pass a hostname
+# or IP to test a NAS remotely instead of running this on the box itself)
 
 set -u
-HOST="${1:-192.168.8.110}"
+HOST="${1:-localhost}"
 FAIL=0
 
 check() {

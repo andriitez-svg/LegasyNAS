@@ -1,13 +1,13 @@
 [Unit]
-Description=LS210 Desktop shell (static files + Glances proxy)
+Description=NAS Desktop shell (static files + Glances proxy)
 After=network.target
 
 [Service]
 Type=simple
-User=debian
-WorkingDirectory=/home/debian
+User=@SERVICE_USER@
+WorkingDirectory=@INSTALL_DIR@
 EnvironmentFile=-/etc/nas-control-plane.conf
-ExecStart=/usr/bin/python3 /home/debian/serve.py
+ExecStart=/usr/bin/python3 @INSTALL_DIR@/serve.py
 Restart=on-failure
 RestartSec=5
 

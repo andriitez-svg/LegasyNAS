@@ -46,3 +46,28 @@ Pulled fresh from the live NAS (root@192.168.8.110) on 2026-09-05. See
   the stick came out, and `/var/downloads/USB/` was back to empty. The full
   add-then-remove lifecycle is verified end-to-end through the real hotplug
   path, not simulated. No open items remain from Phase 3.
+
+## Phase 4 update
+
+- `install.sh` now actually installs the app files and systemd units, not
+  just the config/udev/sudoers pieces from Phases 1 and 3. The static
+  `filemgr.service`/`fetcher.service`/`desktop.service` files captured in
+  the Phase 0 baseline are removed from this repo - `templates/*.tmpl` +
+  `install.sh` are now the single source of truth that generates them, the
+  same way `ls210-power` was superseded in Phase 3.
+- Found and fixed during testing: `install.sh` ran its own `smoke_test.sh`
+  immediately after restarting all three services, with no settle delay -
+  on this single-core box that's occasionally too fast, and the same
+  restart-race that showed up manually during Phase 1 testing. Added a
+  3-second sleep first.
+- Also fixed: `smoke_test.sh`'s default host was hardcoded to
+  `192.168.8.110` - itself a hardcoded-to-this-device assumption, worth
+  catching precisely because this project is being generalized. Now
+  defaults to `localhost`, matching how `install.sh` invokes it.
+- Verified live: ran the full installer twice against the real NAS
+  (pinned via `NAS_CP_SERVICE_USER=debian NAS_CP_INSTALL_DIR=/home/debian`
+  so it reconciled with the existing install instead of relocating it) -
+  first run succeeded end-to-end, second run confirmed idempotency (no
+  duplicate units, sudoers entries, or udev rules; checksums of the
+  redeployed app files matched every prior phase's recorded values exactly,
+  i.e. no drift was introduced).
