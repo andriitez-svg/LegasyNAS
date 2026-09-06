@@ -56,7 +56,7 @@ for your hardware.
 ## Install
 
 ```bash
-git clone https://github.com/AndriiZ/LegasyNAS.git
+git clone https://github.com/andriitez-svg/LegasyNAS.git
 cd LegasyNAS
 sudo ./install.sh
 ```
