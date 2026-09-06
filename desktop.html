@@ -306,6 +306,10 @@ body{
 .sec-pw-msg{ font-size:11.5px; }
 .sec-pw-msg.error{ color:var(--critical); }
 .sec-pw-msg.success{ color:var(--good); }
+/* Both of these set display:flex inline (for their visible layout), which
+   otherwise beats the [hidden] attribute's own display:none - same fix as
+   the context menu's [hidden] override elsewhere in this file. */
+#sec-auth-controls[hidden], #sec-changepw-form[hidden]{ display:none !important; }
 
 /* Wallpaper swatches: more per row so each one is small and the picker stops
    dominating the panel. */
