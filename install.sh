@@ -1,5 +1,5 @@
 #!/bin/sh
-# NAS control-plane installer. Installs Fetcher, the Files app, and the
+# LegasyNAS installer. Installs Fetcher, the Files app, and the
 # Desktop shell as systemd services, plus the USB automount udev rule and
 # the power-action sudoers rule. Safe to re-run: every step either leaves
 # existing state alone (the config file) or regenerates the same output from
@@ -10,15 +10,15 @@
 # or run over `ssh host ./install.sh` without -t): every prompt falls back
 # to its default silently, so scripted/repeat runs never hang on stdin. Every
 # prompted value can also be pre-answered via an environment variable (see
-# each prompt below, e.g. NAS_CP_SERVICE_USER) for unattended/scripted runs
+# each prompt below, e.g. LEGASYNAS_SERVICE_USER) for unattended/scripted runs
 # with a real terminal attached.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CONF=/etc/nas-control-plane.conf
-DEFAULT_CONF="$SCRIPT_DIR/config/nas-control-plane.conf.default"
-SUDOERS_FILE=/etc/sudoers.d/nas-control-plane-power
-AUTH_FILE=/etc/nas-control-plane-auth.conf
+CONF=/etc/legasynas.conf
+DEFAULT_CONF="$SCRIPT_DIR/config/legasynas.conf.default"
+SUDOERS_FILE=/etc/sudoers.d/legasynas-power
+AUTH_FILE=/etc/legasynas-auth.conf
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "Run this as root." >&2
@@ -64,7 +64,7 @@ if [ -f "$CONF" ]; then
     [ -n "${EXISTING_UID:-}" ] && DEFAULT_USER=$(getent passwd "$EXISTING_UID" 2>/dev/null | cut -d: -f1 || true)
     [ -n "$DEFAULT_USER" ] || DEFAULT_USER=debian
 fi
-SERVICE_USER=${NAS_CP_SERVICE_USER:-$(prompt "Run the services as which existing user?" "$DEFAULT_USER")}
+SERVICE_USER=${LEGASYNAS_SERVICE_USER:-$(prompt "Run the services as which existing user?" "$DEFAULT_USER")}
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
     echo "User '$SERVICE_USER' doesn't exist - create it first (e.g. adduser $SERVICE_USER), then re-run this." >&2
     exit 1
@@ -73,19 +73,19 @@ SERVICE_UID=$(id -u "$SERVICE_USER")
 SERVICE_GID=$(id -g "$SERVICE_USER")
 
 # ---------- install location for the app files ----------
-INSTALL_DIR=${NAS_CP_INSTALL_DIR:-$(prompt "Install the app files where?" "/opt/nas-control-plane")}
+INSTALL_DIR=${LEGASYNAS_INSTALL_DIR:-$(prompt "Install the app files where?" "/opt/legasynas")}
 mkdir -p "$INSTALL_DIR"
 
 # ---------- shared config ----------
 if [ -f "$CONF" ]; then
     echo "$CONF already exists - leaving its values alone."
 else
-    ROOT_DIR_ANS=${NAS_CP_ROOT_DIR:-$(prompt "Root directory for shared data" "/var/downloads")}
-    PORT_FILES_ANS=${NAS_CP_PORT_FILES:-$(prompt "Port for the Files app" "8093")}
-    PORT_FETCHER_ANS=${NAS_CP_PORT_FETCHER:-$(prompt "Port for Fetcher" "8092")}
-    PORT_DESKTOP_ANS=${NAS_CP_PORT_DESKTOP:-$(prompt "Port for the Desktop shell" "8095")}
-    DATA_MOUNT_ANS=${NAS_CP_DATA_MOUNT:-$(prompt "Mountpoint the Desktop shell should report storage for" "/mnt/data")}
-    INTERNAL_PREFIX_ANS=${NAS_CP_INTERNAL_DISK_PREFIX:-$(prompt "Device-name prefix of your internal disk (never touched by USB automount)" "sda")}
+    ROOT_DIR_ANS=${LEGASYNAS_ROOT_DIR:-$(prompt "Root directory for shared data" "/var/downloads")}
+    PORT_FILES_ANS=${LEGASYNAS_PORT_FILES:-$(prompt "Port for the Files app" "8093")}
+    PORT_FETCHER_ANS=${LEGASYNAS_PORT_FETCHER:-$(prompt "Port for Fetcher" "8092")}
+    PORT_DESKTOP_ANS=${LEGASYNAS_PORT_DESKTOP:-$(prompt "Port for the Desktop shell" "8095")}
+    DATA_MOUNT_ANS=${LEGASYNAS_DATA_MOUNT:-$(prompt "Mountpoint the Desktop shell should report storage for" "/mnt/data")}
+    INTERNAL_PREFIX_ANS=${LEGASYNAS_INTERNAL_DISK_PREFIX:-$(prompt "Device-name prefix of your internal disk (never touched by USB automount)" "sda")}
 
     sed \
         -e "s#^ROOT_DIR=.*#ROOT_DIR=$ROOT_DIR_ANS#" \
@@ -178,7 +178,7 @@ install_auth() {
         return
     fi
 
-    ENABLE_AUTH=${NAS_CP_ENABLE_AUTH:-$(prompt "Require a login for the web apps? (y/n)" "n")}
+    ENABLE_AUTH=${LEGASYNAS_ENABLE_AUTH:-$(prompt "Require a login for the web apps? (y/n)" "n")}
     case "$ENABLE_AUTH" in
         y | Y | yes | YES) ;;
         *)
@@ -187,12 +187,12 @@ install_auth() {
             ;;
     esac
 
-    AUTH_USER_ANS=${NAS_CP_AUTH_USER:-$(prompt "Login username" "admin")}
+    AUTH_USER_ANS=${LEGASYNAS_AUTH_USER:-$(prompt "Login username" "admin")}
 
     PASSWORD=""
     GENERATED=""
-    if [ -n "${NAS_CP_AUTH_PASSWORD:-}" ]; then
-        PASSWORD="$NAS_CP_AUTH_PASSWORD"
+    if [ -n "${LEGASYNAS_AUTH_PASSWORD:-}" ]; then
+        PASSWORD="$LEGASYNAS_AUTH_PASSWORD"
     elif [ -t 0 ]; then
         stty -echo 2>/dev/null || true
         printf 'Login password (leave blank to auto-generate one): ' >&2

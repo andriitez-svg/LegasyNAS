@@ -17,7 +17,7 @@ from datetime import datetime
 MAX_RETRIES = 50
 RETRY_DELAY_SECONDS = 10
 
-CONFIG_FILE = "/etc/nas-control-plane.conf"
+CONFIG_FILE = "/etc/legasynas.conf"
 
 def _load_config_file():
     cfg = {}
@@ -38,7 +38,7 @@ _FILE_CONFIG = _load_config_file()
 def config(key, default):
     """Env var wins (a systemd unit or manual override), then the shared
     config file, then this hardcoded default - so nothing changes for anyone
-    who hasn't touched /etc/nas-control-plane.conf."""
+    who hasn't touched /etc/legasynas.conf."""
     return os.environ.get(key, _FILE_CONFIG.get(key, default))
 
 DOWNLOAD_DIR = config("ROOT_DIR", "/var/downloads")
@@ -50,7 +50,7 @@ PORT = int(config("PORT_FETCHER", "8092"))
 # it holds a password hash and the secret used to sign session cookies.
 # Auth stays off (everything works exactly as before) until install.sh's
 # auth step actually creates this file with a real password.
-AUTH_FILE = "/etc/nas-control-plane-auth.conf"
+AUTH_FILE = "/etc/legasynas-auth.conf"
 
 def _load_auth_file():
     cfg = {}
@@ -73,7 +73,7 @@ def _load_auth_file():
 def auth_enabled():
     return bool(_load_auth_file().get("AUTH_HASH"))
 
-SESSION_COOKIE = "nascp_session"
+SESSION_COOKIE = "legasynas_session"
 SESSION_LIFETIME = 60 * 60 * 24 * 14  # 14 days
 
 def _sign(expiry, auth):

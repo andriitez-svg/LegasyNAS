@@ -1,12 +1,12 @@
 [Unit]
-Description=NAS Desktop shell (static files + Glances proxy)
+Description=LegasyNAS desktop shell (static files + Glances proxy)
 After=network.target
 
 [Service]
 Type=simple
 User=@SERVICE_USER@
 WorkingDirectory=@INSTALL_DIR@
-EnvironmentFile=-/etc/nas-control-plane.conf
+EnvironmentFile=-/etc/legasynas.conf
 ExecStart=/usr/bin/python3 @INSTALL_DIR@/serve.py
 Restart=on-failure
 RestartSec=5

@@ -153,3 +153,56 @@ Pulled fresh from the live NAS (root@192.168.8.110) on 2026-09-05. See
   then changed it back to the user's original password and reconfirmed
   that works - the live NAS ends this session with the same credentials
   the user originally chose.
+
+## Project renamed to LegasyNAS
+
+User named the project "LegasyNAS" (intended for the GitHub repo) and asked
+for the internal naming to match throughout, not just the repo/folder name.
+Renamed everywhere the old `nas-control-plane`/`nascp` naming appeared:
+
+- `/etc/nas-control-plane.conf` → `/etc/legasynas.conf`
+- `/etc/nas-control-plane-auth.conf` → `/etc/legasynas-auth.conf`
+- `/etc/sudoers.d/nas-control-plane-power` → `/etc/sudoers.d/legasynas-power`
+- `config/nas-control-plane.conf.default` → `config/legasynas.conf.default`
+- Default install dir suggested by `install.sh`: `/opt/nas-control-plane` →
+  `/opt/legasynas`
+- Session cookie `nascp_session` → `legasynas_session`; CSRF-mitigation
+  header `X-NASCP-Confirm` → `X-LegasyNAS-Confirm`
+- localStorage keys `nascp.wallpaper`/`.theme`/`.accent`/`.opacity.` →
+  `legasynas.*`
+- Installer env var prefix `NAS_CP_*` → `LEGASYNAS_*` (also renamed in
+  `smoke_test.sh`'s `LEGASYNAS_TEST_USER`/`LEGASYNAS_TEST_PASSWORD`)
+- Visible branding: page `<title>`, the shell's `.brand` text, and
+  console.error prefixes all changed from "NAS Desktop" to "LegasyNAS";
+  `desktop.service`'s systemd Description likewise
+- Local project folder and README title/clone URL: `nas-control-plane` →
+  `LegasyNAS`
+
+Deliberately left as-is: this file's own historical entries above (accurate
+record of what the names were at the time each phase happened, not
+retroactively rewritten), and `smb.conf`'s `LS210` NetBIOS branding /
+`console.html` (both already flagged in earlier notes as the user's call,
+unrelated to this rename).
+
+Live migration was done as a distinct sequence, not a single blind
+find-and-replace deploy, specifically because this touches the sudoers file
+and the auth file: snapshotted every file about to change; copied
+`/etc/nas-control-plane.conf`/`-auth.conf` to their new names (`cp -p`,
+preserving ownership/permissions - verified byte-identical content after
+copying); deployed the renamed app files + regenerated systemd units (new
+`EnvironmentFile=` path) + regenerated udev rule/script, restarted, and
+smoke-tested with credentials before touching anything further; copied the
+sudoers file to its new name and validated with `visudo -c` *while both old
+and new files were still present*, confirmed `sudo -n reboot` still worked,
+only then deleted the old sudoers file and re-validated; only after every
+new file was proven working did the old `/etc/nas-control-plane*.conf`
+files get deleted. Rollback snapshot removed only at the very end, once a
+full authenticated smoke test and a real logged-in browser session (showing
+"LegasyNAS" as both the tab title and the shell's brand text) both
+confirmed the migration.
+
+One expected side effect, not a bug: anyone with an existing browser session
+will see the sign-in page again after this deploy (the old `nascp_session`
+cookie is simply no longer recognized under its new name) and will have
+lost any saved theme/wallpaper/accent choice stored under the old
+`nascp.*` localStorage keys, reverting to the current default (dark).

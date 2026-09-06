@@ -6,7 +6,7 @@
 # Usage: ./smoke_test.sh [host]   (defaults to localhost - pass a hostname
 # or IP to test a NAS remotely instead of running this on the box itself)
 #
-# If a login is configured, set NAS_CP_TEST_USER and NAS_CP_TEST_PASSWORD so
+# If a login is configured, set LEGASYNAS_TEST_USER and LEGASYNAS_TEST_PASSWORD so
 # this can log in first and carry the session cookie through every other
 # check - otherwise every check below would just see a 200 login page
 # instead of real content and (wrongly) still say PASS, since they only look
@@ -49,14 +49,14 @@ body_contains() {
 
 echo "=== Smoke test against $HOST ==="
 
-if [ -n "${NAS_CP_TEST_USER:-}" ] && [ -n "${NAS_CP_TEST_PASSWORD:-}" ]; then
+if [ -n "${LEGASYNAS_TEST_USER:-}" ] && [ -n "${LEGASYNAS_TEST_PASSWORD:-}" ]; then
     check "Unauthenticated request is gated behind login" yes \
         body_contains "Sign in" "http://$HOST:8093/"
 
     COOKIE_JAR=$(mktemp)
     curl -s -c "$COOKIE_JAR" -X POST \
-        --data-urlencode "username=$NAS_CP_TEST_USER" \
-        --data-urlencode "password=$NAS_CP_TEST_PASSWORD" \
+        --data-urlencode "username=$LEGASYNAS_TEST_USER" \
+        --data-urlencode "password=$LEGASYNAS_TEST_PASSWORD" \
         "http://$HOST:8095/login" -o /dev/null
 
     check "Login succeeds and the session works on a different port" yes \

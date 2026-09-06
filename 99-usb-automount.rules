@@ -1,4 +1,4 @@
-# Auto-mount USB storage into $ROOT_DIR/USB (see /etc/nas-control-plane.conf)
+# Auto-mount USB storage into $ROOT_DIR/USB (see /etc/legasynas.conf)
 # so it shows up in the Files app. Matched by ENV{ID_BUS}=="usb" plus a
 # genuinely removable device, rather than by device-name pattern: a
 # sd[b-z]-style KERNEL match never fires on NVMe/eMMC/virtio storage, which

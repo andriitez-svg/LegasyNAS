@@ -1,6 +1,6 @@
-# Shared configuration for the NAS control-plane services (Fetcher, Files,
+# Shared configuration for the LegasyNAS services (Fetcher, Files,
 # Desktop shell) and the USB automount script. Installed to
-# /etc/nas-control-plane.conf. KEY=value, no spaces around "=", "#" comments
+# /etc/legasynas.conf. KEY=value, no spaces around "=", "#" comments
 # only on their own line (this file is sourced directly by a POSIX shell
 # script as well as parsed by Python, so keep it that simple).
 #

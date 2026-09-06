@@ -11,7 +11,7 @@ set -u
 
 # Shared with the Python services, so both sides agree on the data root and
 # the service account without duplicating the values by hand.
-CONFIG_FILE=/etc/nas-control-plane.conf
+CONFIG_FILE=/etc/legasynas.conf
 [ -f "$CONFIG_FILE" ] && . "$CONFIG_FILE"
 
 ACTION="${1:-}"

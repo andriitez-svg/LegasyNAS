@@ -1,4 +1,4 @@
-# NAS Control Plane
+# LegasyNAS
 
 A small, self-contained control panel for an old Linux NAS: a file manager, a
 download manager, and a desktop-style shell that ties them together — all
@@ -56,8 +56,8 @@ for your hardware.
 ## Install
 
 ```bash
-git clone https://github.com/AndriiZ/nas-control-plane.git
-cd nas-control-plane
+git clone https://github.com/AndriiZ/LegasyNAS.git
+cd LegasyNAS
 sudo ./install.sh
 ```
 
@@ -68,20 +68,20 @@ environment variables:
 
 | Variable | Prompt it answers | Default |
 |---|---|---|
-| `NAS_CP_SERVICE_USER` | User to run the services as | existing config, else `debian` |
-| `NAS_CP_INSTALL_DIR` | Where to put the app files | `/opt/nas-control-plane` |
-| `NAS_CP_ROOT_DIR` | Shared data root (Files + Fetcher) | `/var/downloads` |
-| `NAS_CP_PORT_FILES` | Files app port | `8093` |
-| `NAS_CP_PORT_FETCHER` | Fetcher port | `8092` |
-| `NAS_CP_PORT_DESKTOP` | Desktop shell port | `8095` |
-| `NAS_CP_DATA_MOUNT` | Mountpoint the storage tile reports on | `/mnt/data` |
-| `NAS_CP_INTERNAL_DISK_PREFIX` | Device-name prefix USB automount must never touch | `sda` |
-| `NAS_CP_ENABLE_AUTH` | Require a login (`y`/`n`) | `n` |
-| `NAS_CP_AUTH_USER` | Login username | `admin` |
-| `NAS_CP_AUTH_PASSWORD` | Login password | generated and printed once if left blank |
+| `LEGASYNAS_SERVICE_USER` | User to run the services as | existing config, else `debian` |
+| `LEGASYNAS_INSTALL_DIR` | Where to put the app files | `/opt/legasynas` |
+| `LEGASYNAS_ROOT_DIR` | Shared data root (Files + Fetcher) | `/var/downloads` |
+| `LEGASYNAS_PORT_FILES` | Files app port | `8093` |
+| `LEGASYNAS_PORT_FETCHER` | Fetcher port | `8092` |
+| `LEGASYNAS_PORT_DESKTOP` | Desktop shell port | `8095` |
+| `LEGASYNAS_DATA_MOUNT` | Mountpoint the storage tile reports on | `/mnt/data` |
+| `LEGASYNAS_INTERNAL_DISK_PREFIX` | Device-name prefix USB automount must never touch | `sda` |
+| `LEGASYNAS_ENABLE_AUTH` | Require a login (`y`/`n`) | `n` |
+| `LEGASYNAS_AUTH_USER` | Login username | `admin` |
+| `LEGASYNAS_AUTH_PASSWORD` | Login password | generated and printed once if left blank |
 
-The last four only apply to a fresh install — if `/etc/nas-control-plane.conf`
-or `/etc/nas-control-plane-auth.conf` already exist, the installer leaves
+The last four only apply to a fresh install — if `/etc/legasynas.conf`
+or `/etc/legasynas-auth.conf` already exist, the installer leaves
 them alone and reports that it did.
 
 Re-running `install.sh` at any point (after a `git pull`, or to change which
@@ -94,7 +94,7 @@ Once it's done, open `http://<nas-address>:8095/desktop.html`.
 ## Configuration
 
 Everything the three services need to agree on lives in one file,
-`/etc/nas-control-plane.conf` (`config/nas-control-plane.conf.default` in
+`/etc/legasynas.conf` (`config/legasynas.conf.default` in
 this repo is the template `install.sh` copies from). Edit it and restart the
 three services (`systemctl restart filemgr fetcher desktop`) to pick up a
 change — there's no need to re-run the installer for that.
@@ -147,7 +147,7 @@ tricked into mounting an internal disk. Unplugging cleans up after itself.
 ```
 filemanager.py, fetcher.py, serve.py, desktop.html   the four services
 install.sh                                            installer
-config/nas-control-plane.conf.default                 default shared config
+config/legasynas.conf.default                 default shared config
 templates/*.service.tmpl                              systemd unit templates
 usb-automount, 99-usb-automount.rules                 USB automount
 smoke_test.sh                                         post-deploy regression check

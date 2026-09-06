@@ -12,7 +12,7 @@ import urllib.request
 import urllib.error
 import urllib.parse
 
-CONFIG_FILE = "/etc/nas-control-plane.conf"
+CONFIG_FILE = "/etc/legasynas.conf"
 
 def _load_config_file():
     cfg = {}
@@ -33,7 +33,7 @@ _FILE_CONFIG = _load_config_file()
 def config(key, default):
     """Env var wins (a systemd unit or manual override), then the shared
     config file, then this hardcoded default - so nothing changes for anyone
-    who hasn't touched /etc/nas-control-plane.conf."""
+    who hasn't touched /etc/legasynas.conf."""
     return os.environ.get(key, _FILE_CONFIG.get(key, default))
 
 GLANCES_BASE = "http://127.0.0.1:61208/api/3"
@@ -44,7 +44,7 @@ PORT = int(config("PORT_DESKTOP", "8095"))
 # it holds a password hash and the secret used to sign session cookies.
 # Auth stays off (everything works exactly as before) until install.sh's
 # auth step actually creates this file with a real password.
-AUTH_FILE = "/etc/nas-control-plane-auth.conf"
+AUTH_FILE = "/etc/legasynas-auth.conf"
 
 def _load_auth_file():
     cfg = {}
@@ -66,7 +66,7 @@ def _load_auth_file():
 def auth_enabled():
     return bool(_load_auth_file().get("AUTH_HASH"))
 
-SESSION_COOKIE = "nascp_session"
+SESSION_COOKIE = "legasynas_session"
 SESSION_LIFETIME = 60 * 60 * 24 * 14  # 14 days
 
 def _sign(expiry, auth):
@@ -249,7 +249,7 @@ def handle_change_password_post(handler):
     respond(True)
 
 # Power actions. This service runs as the unprivileged 'debian' user; a narrow
-# rule in /etc/sudoers.d/nas-control-plane-power grants passwordless access to exactly
+# rule in /etc/sudoers.d/legasynas-power grants passwordless access to exactly
 # these two commands and nothing else.
 POWER_ACTIONS = {
     "/system/restart": ("/usr/sbin/reboot", "Restarting"),
@@ -335,7 +335,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # reboot the NAS. Demanding a custom header forces a preflight, and
         # this server sends no CORS headers, so the browser refuses it. The
         # desktop's own same-origin fetch sets the header and passes.
-        if self.headers.get("X-NASCP-Confirm") != "yes":
+        if self.headers.get("X-LegasyNAS-Confirm") != "yes":
             self.send_error(403, "Missing confirmation header")
             return
 
