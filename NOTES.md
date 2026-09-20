@@ -206,3 +206,75 @@ will see the sign-in page again after this deploy (the old `nascp_session`
 cookie is simply no longer recognized under its new name) and will have
 lost any saved theme/wallpaper/accent choice stored under the old
 `nascp.*` localStorage keys, reverting to the current default (dark).
+
+## Big-file transfers: "12 GB copy dies mid-transfer" and "Files UI freezes"
+
+User report: copying a ~12 GB file off the NAS failed partway, whether the
+destination was the PC or an external drive on the mini PC; copying through the
+NAS's own USB port worked but the Files UI lagged and froze.
+
+**Reproduced first, before changing anything.** The same 13.2 GB file was read
+end to end through four independent client paths from the mini PC - `smbclient`
+(SMB), the Files app's HTTP `/download` (curl), GVFS `gio copy` to local disk
+(the stack Nemo uses), and the kernel CIFS mount the user has at
+`/mnt/nas-downloads` (which is mounted `soft`). All four completed with exit 0
+at 30-39 MB/s, NAS up throughout, no OOM/I-O/NIC errors (`dmesg`, NIC counters
+all zero). So the NAS's serving side does not drop a 12 GB transfer on its own.
+The earlier reboot (Sep 18) was a clean shutdown, not a crash.
+
+**Two real causes found:**
+1. *The freeze.* `filemanager.py` was a single-threaded `TCPServer`, and
+   copy/move/zip ran inside the HTTP request - so one long download or copy held
+   the only handler and every other request queued behind it. Measured: while a
+   12 GB download ran, the Files page timed out at 15 s (Fetcher and the desktop
+   shell, separate processes, answered in <1 s). The old code also wrapped copy
+   /move/zip/extract in `except OSError: pass`, so a copy that died partway left
+   a truncated file wearing the real name and told nobody.
+2. *The mid-transfer failure onto the external drive.* The drive on the mini PC
+   (`/dev/sda`, label K) is **FAT32**; `os.pathconf(..., PC_FILESIZEBITS)` reports
+   32 bits (4 GiB max) and `truncate -s 5G` there fails with "File too large".
+   A 12 GB file cannot be written to it, full stop. (The mini PC's kernel log
+   also shows that drive/its USB hub disconnecting repeatedly, which would kill
+   any long copy independently.)
+
+**Not fully explained:** the "copy to the PC's internal disk also fails" case.
+That disk is ext4 with plenty of room and the read paths all worked, so no
+NAS-side cause was found; it may have been the same FAT32 drive, or a client
+problem. If it recurs, the exact error text and how far it got is the missing
+information.
+
+**Fixes (all in `filemanager.py`):**
+- Threaded server (`ThreadingMixIn`, daemon threads, 1 MB stack, TCP keepalive
+  so a vanished client can't pin a thread).
+- Copy/move/zip/extract run as background jobs with a live progress strip
+  (`/jobs`, `/jobs-dismiss`). Copies go through `<name>.part`, fsync'd, then
+  renamed - a failed copy never leaves a truncated file, and "done" means the
+  bytes are on the device. Free space is checked up front; moves within one
+  filesystem stay an instant rename; a cross-filesystem move deletes the
+  source only after the copy completes; copying a folder into itself is
+  refused. Failures are reported with the reason. Zips store already-
+  compressed formats (.gguf, .safetensors, video...) instead of deflating them.
+- FAT32 destinations: a file (or a folder containing one) over 4 GiB - 1 is
+  refused *before* copying with a plain explanation, instead of dying 4 GB in.
+- Downloads/previews: `Range` + `If-Range` + `ETag`/`Last-Modified` (resumable
+  downloads, seekable video previews), served with `sendfile`. Measured on the
+  NAS: 12 GB download 59 MB/s vs 37 MB/s before. Also fixed: a filename with any
+  non-latin-1 character used to raise mid-response and kill the download; now
+  sent as RFC 5987 `filename*`.
+
+**Verified on the live NAS** (not just locally): Files page answers in 0.02-0.05
+s during a 12 GB download (was: timed out); interrupted a real 650 MB download,
+resumed with `curl -C -`, md5 identical to the one the NAS computes; a real copy
+job returned in 0.7 s, reported 1%->100%, page answered in 0.25 s mid-copy,
+result byte-identical (`cmp`), no `.part` left, mtime preserved; using
+temporary ext4 loop "sticks" mounted inside the share: a cross-filesystem move
+(copy, verify, then delete source), a too-big copy refused instantly with exact
+numbers, and a fitting copy into a nearly-full stick - all correct. All test
+artifacts (loop images, mounts, test folders, cookie jar) were removed and
+`/var/downloads/USB` checked empty afterwards. `tests/test_filemanager_bigfiles.py`
+(38 checks, temp dir only) covers this locally.
+
+Not testable without hardware: the FAT32 guard against a physical stick (its
+logic is tested by mocking the mount type; `fs_type_of` was checked against
+the real vfat/ext4/cifs mounts on the mini PC). A rollback copy of the previous
+`filemanager.py` was left at `/root/filemanager.py.before-bigfile-fix` on the NAS.

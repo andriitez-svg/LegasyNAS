@@ -20,7 +20,11 @@ for exactly how far that portability claim goes.
 - **Files** — a browser-based file manager scoped to one root directory:
   browse, upload, rename, move, delete, compress/extract archives, and
   automatic mounting of USB sticks plugged into the NAS (FAT/exFAT/ext2/3/4;
-  see limitations for what's not supported).
+  see limitations for what's not supported). Copying, moving, zipping and
+  extracting run in the background with a live progress bar, so a multi-GB job
+  never freezes the page, and any failure is reported rather than swallowed.
+  Downloads are resumable, so an interrupted 12 GB download picks up where it
+  stopped instead of starting over.
 - **Fetcher** — paste a URL, pick a destination folder, and it downloads
   server-side with automatic retry, pause/resume, and filename/type
   detection — useful for pulling large files onto the NAS without going
@@ -123,6 +127,11 @@ the kernel level (not by name or filesystem type), and the automount script
 independently re-verifies that before ever mounting anything, so it can't be
 tricked into mounting an internal disk. Unplugging cleans up after itself.
 
+One thing to know about drive formatting: **FAT32 cannot hold a file of 4 GB or
+more** — that's the filesystem, not the NAS. Copying a big video or model file
+onto a FAT32 stick is refused up front with a clear message (instead of failing
+4 GB into the copy). Format drives you'll put big files on as exFAT or ext4.
+
 ## Known limitations
 
 - **The SMB share (if you set one up separately) has no login of its own**,
@@ -131,6 +140,9 @@ tricked into mounting an internal disk. Unplugging cleans up after itself.
   infeasible there (no wake-on-LAN, broken CPU idle states, no drive APM
   support) — not attempted on other hardware.
 - **NTFS USB sticks are not supported.** FAT, exFAT, ext2/3/4 work.
+- **FAT32 drives can't hold files of 4 GB or more** (a filesystem limit, on the
+  NAS's USB port or on any external drive you copy to). The Files app refuses
+  such a copy before starting it; use exFAT or ext4 for big files.
 - **systemd only** — see [Requirements](#requirements).
 - **Tested on exactly one device**: a Buffalo LinkStation LS210D running
   Debian 12 (bookworm), armv7l, single ~800MHz core. Everything here works

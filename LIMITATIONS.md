@@ -19,6 +19,11 @@ final README in Phase 5.
 - **No sleep/suspend mode.** Investigated and found infeasible on the
   original hardware (no wake-on-LAN, broken CPU idle states, drive has no
   APM support) and deliberately not pursued further.
+- **FAT32 drives can't hold files of 4 GB or more.** That's the filesystem's
+  hard limit, not something the NAS can work around - it applies to sticks in
+  the NAS's own USB port and to any external drive you download onto from a PC.
+  The Files app checks this before a copy starts and explains it; format drives
+  meant for big files (videos, model checkpoints) as exFAT or ext4.
 - **NTFS USB sticks are not supported** — the kernel this was built against
   has neither `ntfs3` nor `ntfs-3g`. FAT/exFAT/ext2/3/4 work.
 - **systemd only.** The installer targets systemd-based Linux NAS devices.
