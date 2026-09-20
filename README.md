@@ -24,7 +24,9 @@ for exactly how far that portability claim goes.
   extracting run in the background with a live progress bar, so a multi-GB job
   never freezes the page, and any failure is reported rather than swallowed.
   Downloads are resumable, so an interrupted 12 GB download picks up where it
-  stopped instead of starting over.
+  stopped instead of starting over. Drives plugged into the NAS get an **Eject**
+  button (and a right-click "Eject drive"), and a copy aimed at the `USB` folder
+  with no drive mounted is refused instead of quietly filling the NAS's own disk.
 - **Fetcher** — paste a URL, pick a destination folder, and it downloads
   server-side with automatic retry, pause/resume, and filename/type
   detection — useful for pulling large files onto the NAS without going
@@ -32,7 +34,10 @@ for exactly how far that portability claim goes.
 - **Desktop shell** — a single page that hosts both apps side by side (dock,
   window chrome, live CPU/RAM/storage via [Glances](https://nicolargo.github.io/glances/)),
   plus light/dark theme, wallpaper and accent-color pickers, and NAS-level
-  restart/shutdown buttons.
+  restart/shutdown buttons. A copy/move/zip in progress shows a live progress bar
+  next to the NAS name at the top, and system messages (a job finished or failed,
+  a USB drive connected, ejected, or pulled out without ejecting) pop up in the
+  bottom-right corner.
 - **Optional login** — a shared session across all three services (log in
   once, stay logged in everywhere), off by default. See
   [Login](#login-optional).
@@ -50,8 +55,9 @@ for exactly how far that portability claim goes.
   tells you if one's missing.
 - An existing, unprivileged **user account** to run the services as (the
   installer won't create one for you).
-- `sudo` available, with permission to add a sudoers.d rule (needed for the
-  NAS restart/shutdown buttons).
+- `sudo` available, with permission to add sudoers.d rules (needed for the
+  NAS restart/shutdown buttons and the USB Eject button - each gets its own
+  narrow rule, generated and validated by the installer).
 
 This has been tested on exactly one device — see
 [Known limitations](#known-limitations) for what that does and doesn't mean
@@ -127,6 +133,16 @@ the kernel level (not by name or filesystem type), and the automount script
 independently re-verifies that before ever mounting anything, so it can't be
 tricked into mounting an internal disk. Unplugging cleans up after itself.
 
+**Eject before you unplug.** Each drive in the `USB` folder has an **Eject**
+button (also in the right-click menu). It flushes everything to the drive and
+unmounts it, and refuses - with the reason - if a copy is still using it or a
+file is open over the network. Pulling a drive out *without* ejecting raises a
+warning in the corner, since anything still being written may be incomplete. The
+web apps are unprivileged, so this goes through one small root-owned helper
+(`usb-eject`) allowed by a single sudoers rule; it re-checks that the target
+really is a removable USB drive, so it can't be pointed at the system or data
+disk.
+
 One thing to know about drive formatting: **FAT32 cannot hold a file of 4 GB or
 more** — that's the filesystem, not the NAS. Copying a big video or model file
 onto a FAT32 stick is refused up front with a clear message (instead of failing
@@ -161,8 +177,9 @@ filemanager.py, fetcher.py, serve.py, desktop.html   the four services
 install.sh                                            installer
 config/legasynas.conf.default                 default shared config
 templates/*.service.tmpl                              systemd unit templates
-usb-automount, 99-usb-automount.rules                 USB automount
+usb-automount, 99-usb-automount.rules, usb-eject      USB automount + safe eject
 smoke_test.sh                                         post-deploy regression check
+tests/                                                automated tests (python3 tests/test_filemanager_bigfiles.py)
 ```
 
 ## License

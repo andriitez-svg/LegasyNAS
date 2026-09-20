@@ -1,0 +1,71 @@
+#!/bin/sh
+# Safely eject a USB drive that usb-automount mounted under <root>/USB.
+#
+# The Files app runs this as root through one narrow sudoers rule
+# (/etc/sudoers.d/legasynas-usb-eject) - the web app itself is unprivileged and
+# can't unmount anything. Because it runs as root and takes a name that came
+# from a web request, it trusts nothing: the name must be a plain single drive
+# name, the target must be a real mountpoint directly under <root>/USB, and the
+# device behind it must independently prove to be removable USB storage - the
+# same checks usb-automount makes before mounting - so it can never be talked
+# into unmounting the system or data disk.
+#
+# Exit codes: 0 ejected, 3 busy, 64 bad name, 65 not mounted,
+# 66 not a removable USB drive.
+
+set -u
+
+CONFIG_FILE=/etc/legasynas.conf
+[ -f "$CONFIG_FILE" ] && . "$CONFIG_FILE"
+
+BASE="${ROOT_DIR:-/var/downloads}/USB"
+INTERNAL_DISK_PREFIX="${INTERNAL_DISK_PREFIX:-sda}"
+NAME="${1:-}"
+
+log() { logger -t usb-eject "$*"; }
+fail() { code=$1; shift; echo "$*" >&2; log "refused: $*"; exit "$code"; }
+
+case "$NAME" in
+    '' | . | .. | *[!A-Za-z0-9._-]*) fail 64 "That isn't a valid drive name." ;;
+esac
+[ "${#NAME}" -le 64 ] || fail 64 "That isn't a valid drive name."
+
+TARGET="$BASE/$NAME"
+mountpoint -q "$TARGET" 2>/dev/null ||
+    fail 65 "'$NAME' isn't mounted - already ejected, or unplugged."
+
+SRC=$(findmnt -no SOURCE --target "$TARGET" 2>/dev/null)
+case "$SRC" in
+    /dev/*) ;;
+    *) fail 66 "'$NAME' isn't a removable USB drive." ;;
+esac
+DEV="${SRC#/dev/}"
+case "$DEV" in
+    ${INTERNAL_DISK_PREFIX}*) fail 66 "'$NAME' isn't a removable USB drive." ;;
+esac
+
+BUS=$(udevadm info --query=property --name="$SRC" 2>/dev/null | sed -n 's/^ID_BUS=//p')
+[ "$BUS" = "usb" ] || fail 66 "'$NAME' isn't a removable USB drive."
+# "removable" lives on the parent disk for a partition node (see usb-automount).
+CLASS_PATH="/sys/class/block/$DEV"
+if [ -f "$CLASS_PATH/partition" ]; then
+    REMOVABLE=$(cat "$CLASS_PATH/../removable" 2>/dev/null)
+else
+    REMOVABLE=$(cat "$CLASS_PATH/removable" 2>/dev/null)
+fi
+[ "$REMOVABLE" = "1" ] || fail 66 "'$NAME' isn't a removable USB drive."
+
+# Push everything still waiting in memory out to the drive first, so "safe to
+# unplug" is actually true when this finishes.
+sync
+
+# Deliberately not a lazy unmount: that would report success while something
+# still has files open on the drive, which is exactly what ejecting is meant
+# to catch.
+if umount "$TARGET" 2>/dev/null; then
+    rmdir "$TARGET" 2>/dev/null
+    log "ejected $NAME ($SRC)"
+    echo "ejected"
+    exit 0
+fi
+fail 3 "'$NAME' is busy - something is still using it (a copy in progress, or a file open over the network). Close it and try again."

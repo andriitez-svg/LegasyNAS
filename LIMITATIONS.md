@@ -24,6 +24,11 @@ final README in Phase 5.
   the NAS's own USB port and to any external drive you download onto from a PC.
   The Files app checks this before a copy starts and explains it; format drives
   meant for big files (videos, model checkpoints) as exFAT or ext4.
+- **The `USB` folder is only a holder for drives.** Copy/move/zip refuse to write
+  into it (or into a folder under it) unless a real drive is mounted there. Two
+  paths are not guarded yet: uploading through the browser while sitting in an
+  empty `USB` folder, and pointing Fetcher at it - either would land on the NAS's
+  own disk, not a stick.
 - **NTFS USB sticks are not supported** — the kernel this was built against
   has neither `ntfs3` nor `ntfs-3g`. FAT/exFAT/ext2/3/4 work.
 - **systemd only.** The installer targets systemd-based Linux NAS devices.

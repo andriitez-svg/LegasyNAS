@@ -75,6 +75,9 @@ check "Desktop shell responds" 200 \
 check "Desktop shell exposes its config to the client" 200 \
     http_code "http://$HOST:8095/api/config"
 
+check "Desktop shell relays the Files app's live status (progress + notifications)" yes \
+    body_contains '"seq"' "http://$HOST:8095/nas/status"
+
 check "Glances proxy responds" 200 \
     http_code "http://$HOST:8095/glances/cpu"
 

@@ -278,3 +278,71 @@ Not testable without hardware: the FAT32 guard against a physical stick (its
 logic is tested by mocking the mount type; `fs_type_of` was checked against
 the real vfat/ext4/cifs mounts on the mini PC). A rollback copy of the previous
 `filemanager.py` was left at `/root/filemanager.py.before-bigfile-fix` on the NAS.
+
+## Eject button, corner notifications, top-bar progress (user-requested follow-up)
+
+Asked for: an Eject button for USB drives (there was none), system messages in
+the bottom-right corner, and a progress bar for copies at the top next to the NAS
+name. Also reformatting the FAT32 external drive "K" as ext4.
+
+**Found while investigating (not part of the request):** a 12.3 GB copy of
+`qwen-image-edit-2511-Q4_K_M.gguf` was sitting *inside* `/var/downloads/USB/`
+on the NAS's internal disk (`/var/downloads/USB` is not a mountpoint - no drive
+was plugged in). "Copy to USB" with no drive mounted just writes into that empty
+container folder, silently filling the internal disk. Left in place (it's the
+user's data; deleting it needs their say-so). Now prevented for copy/move/zip
+(see `usb_dest_problem`). Not guarded: browser upload while inside an empty
+`USB` folder, and Fetcher pointed at it - noted in LIMITATIONS.md.
+
+**Eject.** The web apps run unprivileged, so `usb-eject` (root-owned, in
+`/usr/local/sbin`) does the unmount, allowed by exactly one sudoers rule
+(`/etc/sudoers.d/legasynas-usb-eject`, generated + `visudo -c`-validated by
+`install.sh`). It takes only a drive *name*, and re-verifies everything itself
+rather than trusting the web app: strict name pattern, must be a real
+mountpoint directly under `<root>/USB`, must sit on the USB bus (`ID_BUS`) and be
+removable, must not match the internal-disk prefix. It `sync`s, then does a
+plain `umount` (deliberately not lazy - a lazy unmount would report success
+with files still open, the very thing eject exists to catch) and removes the
+mount folder. Exit codes: 0 ok, 3 busy, 64 bad name, 65 not mounted, 66 not a
+removable USB drive. The Files app also refuses if one of its own running jobs is
+reading/writing that drive (jobs record the paths they touch), and the request
+needs the same `X-LegasyNAS-Confirm` header the power buttons use, so a
+cross-site form post can't unmount a drive. Eject is itself a job, so a refusal is
+just a job that already failed and shows up in the same strip/notifications.
+
+**Notifications + top-bar progress.** The Files app keeps a small in-memory event
+list (job finished/failed, drive connected/ejected/pulled out; ids only go up) and
+a background thread that watches `<root>/USB` (`usb_watch`, every 3 s, cached so a
+failing drive can't hang a web request). `GET /status` returns running jobs, the
+drives, and events after `?since=N` - the first call only sets a baseline so
+opening the page never replays old news. The Desktop shell is a different origin,
+so instead of loosening CORS, `serve.py` relays `/nas/status` to the Files app
+(like it already relays Glances), forwarding the caller's own login cookie so the
+Files app's normal auth check still applies; junk `since` values are dropped. The
+shell polls every 5 s idle / 1.5 s while a job runs, and the Files page nudges it
+(postMessage, origin-checked) the moment it sees a job, so the bar shows at once.
+Toasts: success/info 6.5 s, warning/error 14 s, click to dismiss, max 5.
+
+**Verified on the live NAS:** installed via the real `install.sh` (which exercises
+the new sudoers step); authenticated smoke test 11/11; helper, via sudo as the
+web-app user: bad names -> 64, unmounted -> 65, a real non-USB (loop) mount -> 66
+and left untouched, and sudo refused any *other* command. The unmount logic itself
+(busy -> 3 and left mounted, free -> unmounted + folder removed, again -> 65) was
+tested on a temporary loop mount using a copy of the script with *only* the two
+USB/removable checks removed - there was no physical USB drive to test the
+positive path on, so the first real eject of a real stick is the one untested
+step. End to end over HTTP: the guard refused a copy into `USB`; a connected drive
+and a pulled-out-without-eject drive each produced the right notification within
+seconds; pressing Eject on a non-USB mount went HTTP -> job -> sudo -> helper and
+came back as a plain-English error; the confirm header was enforced (403). In a
+browser, the progress pill showed live during a real copy and toasts were captured
+appearing in the DOM. `tests/test_filemanager_bigfiles.py` now has 82 checks.
+All test artifacts (loop images, mounts, test copies, cookie jar) were removed.
+
+**Drive "K".** It is FAT32 on the mini PC (see the big-file notes above). Its
+reformat needs the user's sudo password and is a permanent erase, so it was left
+to the user: `format-usb-drive.sh` (kept *outside* the repo, in the project's
+parent folder) finds the drive by USB-bus + label, refuses lookalikes / duplicates
+/ anything the running system lives on, shows what it found and needs ERASE typed;
+`--check` changes nothing. Its detection and refusals were tested against a stubbed
+`lsblk`; the drive was not plugged in at the time, so the real run finds nothing.

@@ -15,6 +15,7 @@ import time
 import errno
 import itertools
 import socket
+import subprocess
 import threading
 from datetime import datetime
 from email.utils import formatdate
@@ -475,16 +476,41 @@ def _prune_jobs():
                     if j["state"] != "running" and now - j["finished"] > JOB_KEEP_SECONDS]:
             del JOBS[jid]
 
-def job_start(label, worker, wait=0.5):
+# ---------- notifications ----------
+# Things worth telling the person at the screen about (a copy finished or failed,
+# a drive was plugged in or ejected). The Desktop shell polls /status and shows
+# each one once as a toast in the corner; ids only ever go up, so "give me what
+# I haven't seen" is just "everything after id N".
+EVENTS = []
+EVENTS_LOCK = threading.Lock()
+_EVENT_IDS = itertools.count(1)
+
+def push_event(level, text):
+    with EVENTS_LOCK:
+        EVENTS.append({"id": next(_EVENT_IDS), "level": level, "text": text, "t": time.time()})
+        del EVENTS[:-100]
+
+def events_since(seq):
+    """(events newer than seq, latest id). seq=None means "I'm just starting":
+    no backlog, just where the counter is now, so opening the page never
+    replays old news."""
+    with EVENTS_LOCK:
+        latest = EVENTS[-1]["id"] if EVENTS else 0
+        if seq is None:
+            return [], latest
+        return [e for e in EVENTS if e["id"] > seq], latest
+
+def job_start(label, worker, wait=0.5, done_text=None, touches=()):
     """Run worker(job) on a daemon thread and return the job.
 
     Waits up to `wait` seconds for it, so instant work (a same-filesystem
     move is only a rename) is already finished by the time the page reloads,
     while slow work returns at once and is followed through the progress
-    strip instead."""
+    strip instead. `touches` lists the paths the job reads or writes, so an
+    eject can tell whether a drive is still in use."""
     job = {"id": next(_JOB_IDS), "label": label, "state": "running",
            "done": 0, "total": 0, "error": "", "notes": [],
-           "started": time.time(), "finished": 0.0}
+           "started": time.time(), "finished": 0.0, "touches": list(touches)}
 
     def run():
         try:
@@ -493,6 +519,13 @@ def job_start(label, worker, wait=0.5):
             job["error"] = job["error"] or str(e) or e.__class__.__name__
         # State goes last: the progress strip treats it as the "finished" signal.
         job["finished"] = time.time()
+        if job["error"]:
+            push_event("error", f"{label} failed: {job['error']}")
+        else:
+            text = done_text or f"{label} - finished"
+            if job["notes"]:
+                text += f" ({len(job['notes'])} skipped)"
+            push_event("success", text)
         job["state"] = "error" if job["error"] else "done"
 
     with JOBS_LOCK:
@@ -509,6 +542,130 @@ def jobs_snapshot():
         jobs = sorted(JOBS.values(), key=lambda j: j["id"])
         return [{**{k: j[k] for k in ("id", "label", "state", "done", "total", "error")},
                  "notes": list(j["notes"])} for j in jobs]
+
+def _under(path, root):
+    return path == root or path.startswith(root + os.sep)
+
+# ---------- USB drives ----------
+# usb-automount mounts each stick at <root>/USB/<label>. Everything that needs to
+# know which drives exist reads this cached list, refreshed by a background
+# thread: asking a drive that's failing for its free space can hang, and that
+# must never be able to hang a web request.
+USB_STATE = {"drives": []}
+_EXPECTED_GONE = {}   # drive name -> when we started ejecting it on purpose
+EJECT_HELPER = "/usr/local/sbin/usb-eject"
+_DRIVE_NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+def usb_base():
+    return os.path.join(ROOT_DIR, "USB")
+
+def usb_drives():
+    base = usb_base()
+    try:
+        names = sorted(os.listdir(base))
+    except OSError:
+        return []
+    table = _mount_table()
+    drives = []
+    for name in names:
+        path = os.path.join(base, name)
+        mounted = table.get(os.path.realpath(path))
+        if not mounted:
+            continue  # a plain folder, not a mounted drive
+        try:
+            st = os.statvfs(path)
+            total, free = st.f_blocks * st.f_frsize, st.f_bavail * st.f_frsize
+        except OSError:
+            total = free = 0
+        drives.append({"name": name, "device": mounted[0], "fstype": mounted[1],
+                       "total": total, "free": free})
+    return drives
+
+def usb_watch(interval=3.0, stop=None):
+    """Notice drives being plugged in or pulled out, and say so. Runs until
+    `stop` (a threading.Event) is set - forever, in the server."""
+    known = None
+    while not (stop and stop.is_set()):
+        try:
+            drives = usb_drives()
+        except Exception:
+            drives = None
+        if drives is not None:
+            USB_STATE["drives"] = drives
+            names = {d["name"] for d in drives}
+            if known is not None:
+                for d in drives:
+                    if d["name"] not in known:
+                        push_event("info", f"USB drive '{d['name']}' connected - "
+                                           f"{fmt_bytes(d['total'])}, {d['fstype']}")
+                for gone in sorted(known - names):
+                    when = _EXPECTED_GONE.pop(gone, None)
+                    if when is None or time.time() - when > 300:
+                        push_event("warning", f"USB drive '{gone}' was removed without ejecting - "
+                                              f"anything still being copied to it may be incomplete")
+            known = names
+        if stop:
+            stop.wait(interval)
+        else:
+            time.sleep(interval)
+
+def usb_dest_problem(dest_real):
+    """The USB folder only holds the drives usb-automount mounts. With no drive
+    mounted it is just an empty folder on the NAS's own disk - so a copy into
+    it "works", quietly filling the internal disk while you think it's the stick."""
+    base = os.path.realpath(usb_base())
+    real = os.path.realpath(dest_real)
+    if real == base:
+        return ("The USB folder only holds drives - open the drive's own folder inside it "
+                "and copy there. If no drive is listed, it isn't plugged in (yet).")
+    if _under(real, base):
+        drive = real[len(base) + 1:].split(os.sep, 1)[0]
+        if not os.path.ismount(os.path.join(base, drive)):
+            return (f"'{drive}' isn't a mounted USB drive, so this would fill the NAS's own "
+                    f"disk instead. Plug the drive in and wait for it to appear.")
+    return None
+
+def start_eject(name):
+    """Start ejecting the drive called `name`. Always returns a job: a refusal is
+    just a job that has already failed, so it shows up in the same progress
+    strip and notifications as everything else instead of needing its own UI."""
+    valid = bool(_DRIVE_NAME.match(name or "")) and name not in (".", "..")
+    real = os.path.realpath(os.path.join(usb_base(), name)) if valid else ""
+
+    def work(job):
+        if not valid:
+            raise RuntimeError("That isn't a USB drive name.")
+        if not os.path.ismount(os.path.join(usb_base(), name)):
+            raise RuntimeError(f"'{name}' isn't mounted - already ejected, or unplugged.")
+        with JOBS_LOCK:
+            busy = [j for j in JOBS.values()
+                    if j is not job and j["state"] == "running"
+                    and any(_under(p, real) for p in j["touches"])]
+        if busy:
+            raise RuntimeError(f"'{name}' is still in use ({busy[0]['label']}). "
+                               f"Let that finish, then eject.")
+        _EXPECTED_GONE[name] = time.time()
+        try:
+            r = subprocess.run(["sudo", "-n", EJECT_HELPER, name],
+                               capture_output=True, text=True, timeout=240)
+        except FileNotFoundError:
+            _EXPECTED_GONE.pop(name, None)
+            raise RuntimeError("Eject isn't set up on this NAS yet - re-run install.sh.")
+        except subprocess.TimeoutExpired:
+            _EXPECTED_GONE.pop(name, None)
+            raise RuntimeError(f"Timed out waiting for '{name}' to finish writing - it may still be "
+                               f"busy. Try again in a minute before unplugging it.")
+        if r.returncode != 0:
+            _EXPECTED_GONE.pop(name, None)
+            msg = (r.stderr or r.stdout).strip().splitlines()
+            text = msg[-1] if msg else f"eject failed (exit {r.returncode})"
+            if "password is required" in text or "not allowed" in text or "may not run" in text:
+                text = "Eject isn't set up on this NAS yet - re-run install.sh."
+            raise RuntimeError(text)
+
+    return job_start(f"Ejecting {name}", work, wait=0.3,
+                     done_text=f"'{name}' ejected - safe to unplug",
+                     touches=[real] if real else [])
 
 def tree_size(path):
     """Bytes under path (a file or a folder), not following symlinks."""
@@ -538,23 +695,32 @@ def tree_size(path):
 FAT_MAX_FILE = 4 * 1024 ** 3 - 1
 _FAT_TYPES = ("vfat", "msdos", "fat")
 
-def fs_type_of(path):
-    """Filesystem type (as /proc/mounts names it) of whatever holds `path`."""
-    real = os.path.realpath(path)
-    best, best_type = "", None
+def _unescape_mount(s):
+    """/proc/mounts writes spaces, tabs, newlines and backslashes as octal escapes."""
+    return (s.replace("\\040", " ").replace("\\011", "\t")
+             .replace("\\012", "\n").replace("\\134", "\\"))
+
+def _mount_table():
+    """{mountpoint: (source, fstype)} for everything mounted right now."""
+    table = {}
     try:
         with open("/proc/mounts") as f:
             for line in f:
                 parts = line.split()
-                if len(parts) < 3:
-                    continue
-                mnt = (parts[1].replace("\\040", " ").replace("\\011", "\t")
-                       .replace("\\012", "\n").replace("\\134", "\\"))
-                inside = mnt == "/" or real == mnt or real.startswith(mnt.rstrip("/") + "/")
-                if inside and len(mnt) >= len(best):
-                    best, best_type = mnt, parts[2]
+                if len(parts) >= 3:
+                    table[_unescape_mount(parts[1])] = (parts[0], parts[2])
     except OSError:
-        return None
+        pass
+    return table
+
+def fs_type_of(path):
+    """Filesystem type (as /proc/mounts names it) of whatever holds `path`."""
+    real = os.path.realpath(path)
+    best, best_type = "", None
+    for mnt, (_src, fstype) in _mount_table().items():
+        inside = mnt == "/" or real == mnt or real.startswith(mnt.rstrip("/") + "/")
+        if inside and len(mnt) >= len(best):
+            best, best_type = mnt, fstype
     return best_type
 
 def largest_file(path):
@@ -664,6 +830,10 @@ def do_bulk_move_or_copy(sels, dest_input, op):
 
     def work(job):
         dest_real, _dest_rel = safe_path(dest_input)
+        problem = usb_dest_problem(dest_real)
+        if problem:
+            job["error"] = problem
+            return
         os.makedirs(dest_real, exist_ok=True)
         plan, targets = [], set()
         for rel in sels:
@@ -727,7 +897,10 @@ def do_bulk_move_or_copy(sels, dest_input, op):
         if failed:
             job["error"] = "Could not finish: " + "; ".join(failed)
 
-    return job_start(label, work)
+    past = "Moved" if op == "move" else "Copied"
+    what = (os.path.basename(sels[0].rstrip("/")) if len(sels) == 1 else f"{len(sels)} items")
+    touches = [safe_path(dest_input)[0]] + [safe_path(r)[0] for r in sels]
+    return job_start(label, work, done_text=f"{past} {what}", touches=touches)
 
 # Already-compressed formats: deflating them burns CPU on this box for no size
 # gain, so they go into the zip as-is.
@@ -790,7 +963,9 @@ def do_bulk_compress(cur_real, sels, archive_name):
                 pass
             raise
 
-    return job_start(f"Zipping {len(sels)} item{'' if len(sels) == 1 else 's'} into {name}", work)
+    return job_start(f"Zipping {len(sels)} item{'' if len(sels) == 1 else 's'} into {name}", work,
+                     done_text=f"Created {name}",
+                     touches=[cur_real] + [safe_path(r)[0] for r in sels])
 
 def list_all_folders(root_dir):
     """Every existing folder under root_dir, as '/'-joined relative paths -
@@ -1044,6 +1219,10 @@ a.name:hover{{color:var(--accent);}}
 .job-error{{border-color:var(--danger);}}
 .job-error .job-sub{{color:var(--danger);}}
 .job-x{{background:none;border:0;color:var(--text-muted);cursor:pointer;font-size:16px;line-height:1;padding:0 2px;}}
+.eject-btn{{margin-left:10px;padding:2px 10px;font-size:11.5px;font-weight:600;border-radius:12px;border:1px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer;}}
+.eject-btn:hover{{background:var(--accent);color:#fff;}}
+.eject-btn:disabled{{opacity:.55;cursor:default;}}
+.tile .eject-btn{{margin:0;}}
 .thumb-inline{{vertical-align:-9px;margin-right:5px;}}
 .icon{{display:inline-block;vertical-align:-4px;margin-right:3px;}}
 .empty{{padding:20px;text-align:center;color:var(--text-faint);font-size:13px;}}
@@ -1109,6 +1288,7 @@ def build_item(e, st, relpath, thumb_px):
     q_enc = urllib.parse.quote(entry_rel)
     sel = esc(entry_rel)
     is_dir = e.is_dir(follow_symlinks=False)
+    eject_name = ""
     if is_dir:
         # A mounted USB stick is a real filesystem mountpoint (that's what the
         # automount script gives it), unlike an ordinary folder underneath it -
@@ -1119,6 +1299,8 @@ def build_item(e, st, relpath, thumb_px):
             is_usb_mount = os.path.ismount(e.path)
         except OSError:
             is_usb_mount = False
+        if is_usb_mount and relpath.strip("/") == "USB":
+            eject_name = e.name  # a drive directly inside the USB folder
         thumb_html = (usb_svg(thumb_px, css_class="") if is_usb_mount
                       else folder_svg(thumb_px, css_class=""))
         name_href, name_target = f"/?path={q_enc}", ""
@@ -1143,19 +1325,29 @@ def build_item(e, st, relpath, thumb_px):
         "modified": modified, "thumb_html": thumb_html,
         "name_href": name_href, "name_target": name_target,
         "extract_link": extract_link, "download_link": download_link,
+        "eject_name": eject_name,
     }
+
+def eject_button(it):
+    if not it["eject_name"]:
+        return "", ""
+    btn = (f'<button type="button" class="eject-btn" data-eject="{esc(it["eject_name"])}" '
+           f'title="Safely remove this drive">&#9167; Eject</button>')
+    return btn, ' data-usb="1"'
 
 def render_table(items, relpath, q, sort, direction):
     rows = ""
     for it in items:
         isdir_attr = ' data-isdir="1"' if it["is_dir"] else ""
+        eject_html, usb_attr = eject_button(it)
+        isdir_attr += usb_attr
         archive_attr = ' data-archive="1"' if it["is_archive"] else ""
         thumb_cls = "" if it["is_dir"] else ' class="thumb-inline"'
         rows += (
             f'<tr draggable="true" data-relpath="{it["sel"]}"{isdir_attr}{archive_attr}>'
             f'<td><input type="checkbox" name="sel" value="{it["sel"]}"> '
             f'<span{thumb_cls}>{it["thumb_html"]}</span> '
-            f'<a class="name" href="{it["name_href"]}"{it["name_target"]}>{esc(it["name"])}</a></td>'
+            f'<a class="name" href="{it["name_href"]}"{it["name_target"]}>{esc(it["name"])}</a>{eject_html}</td>'
             f'<td>{it["size"]}</td><td>{it["modified"]}</td></tr>'
         )
     if not rows:
@@ -1175,6 +1367,8 @@ def render_tiles(items, thumb_px, q):
     tiles = ""
     for it in items:
         isdir_attr = ' data-isdir="1"' if it["is_dir"] else ""
+        eject_html, usb_attr = eject_button(it)
+        isdir_attr += usb_attr
         archive_attr = ' data-archive="1"' if it["is_archive"] else ""
         # No visible checkbox in Tiles view - selection is click/ctrl-click on
         # the tile itself (handled by the script below), which just toggles
@@ -1188,6 +1382,7 @@ def render_tiles(items, thumb_px, q):
             f'<a class="tile-thumb" href="{it["name_href"]}"{it["name_target"]}>{it["thumb_html"]}</a>'
             f'</div>'
             f'<div class="tile-name" title="{esc(it["name"])}">{esc(it["name"])}</div>'
+            f'{eject_html}'
             f'</div>'
         )
     if not tiles:
@@ -1253,15 +1448,49 @@ JOBS_BAR = """<div id="jobs-bar"></div>
           location.reload();
         }
       });
-      if(anyRunning) timer = setTimeout(poll, 2000);
+      if(anyRunning){
+        timer = setTimeout(poll, 2000);
+        // We're inside the Desktop shell's iframe: nudge it to refresh its
+        // top-bar progress now instead of at its next slow check.
+        try{ if(window.parent !== window) window.parent.postMessage("legasynas-poll", "*"); }catch(e){}
+      }
     }).catch(function(){ timer = setTimeout(poll, 5000); });
   }
+  // For work started from this page after it loaded (an eject): treat it as
+  // "watched running" so the page reloads when it finishes, even if it was
+  // already over by the time we first looked.
+  window.legasynasWatchJob = function(id){ running[id] = true; poll(); };
   bar.addEventListener("click", function(e){
     var id = e.target.getAttribute && e.target.getAttribute("data-dismiss");
     if(!id) return;
     fetch("/jobs-dismiss", {method: "POST", body: new URLSearchParams({id: id})}).then(poll);
   });
   poll();
+})();
+</script>
+"""
+
+EJECT_JS = """<script>
+(function(){
+  function ejectDrive(name){
+    document.querySelectorAll('.eject-btn').forEach(function(b){
+      if(b.getAttribute('data-eject') === name){ b.disabled = true; b.textContent = 'Ejecting...'; }
+    });
+    fetch('/usb-eject', {method: 'POST', credentials: 'same-origin',
+                         headers: {'X-LegasyNAS-Confirm': 'yes'},
+                         body: new URLSearchParams({name: name})})
+      .then(function(r){ return r.json(); })
+      .then(function(res){ if(res.ok && window.legasynasWatchJob) window.legasynasWatchJob(res.job); else location.reload(); })
+      .catch(function(){ location.reload(); });
+  }
+  window.ejectDrive = ejectDrive;
+  // Capture phase, so a click on the button never also selects/drags the row.
+  document.addEventListener('click', function(e){
+    var b = e.target.closest && e.target.closest('.eject-btn');
+    if(!b) return;
+    e.preventDefault(); e.stopPropagation();
+    if(!b.disabled) ejectDrive(b.getAttribute('data-eject'));
+  }, true);
 })();
 </script>
 """
@@ -1307,7 +1536,7 @@ def render_listing(relpath, q="", sort="name", direction="asc", view="list", thu
     search_label = f'Search: &ldquo;{esc(q)}&rdquo;' if q else "Search"
 
     content = f"""
-{JOBS_BAR}
+{JOBS_BAR}{EJECT_JS}
 <div class="toolbar">
 <div class="action-row">
 <details class="action" name="toolbar-nav"{' open' if q else ''}>
@@ -1399,6 +1628,7 @@ chooser, <b>Open</b> steps <i>into</i> a folder instead of choosing it.</p>
 <button type="button" data-act="moveto">Move to&hellip;</button>
 <button type="button" data-act="copyto">Copy to&hellip;</button>
 <button type="button" data-act="compress">Compress&hellip;</button>
+<button type="button" data-act="eject">Eject drive</button>
 <button type="button" data-act="delete" class="danger">Delete</button>
 </div>
 <div id="ctx-moveto" class="popover ctx-sub" hidden>
@@ -1545,6 +1775,7 @@ chooser, <b>Open</b> steps <i>into</i> a folder instead of choosing it.</p>
     menu.querySelector('[data-act=download]').disabled = !single || isDir;
     menu.querySelector('[data-act=rename]').disabled = !single;
     menu.querySelector('[data-act=extract]').disabled = !isArchive;
+    menu.querySelector('[data-act=eject]').disabled = !(single && item.hasAttribute('data-usb'));
     placeAt(menu, e.clientX, e.clientY);
   }});
 
@@ -1555,7 +1786,10 @@ chooser, <b>Open</b> steps <i>into</i> a folder instead of choosing it.</p>
     if (act === 'download') window.location = '/download?path=' + encodeURIComponent(ctxTargetPath);
     else if (act === 'rename') window.location = '/rename?path=' + encodeURIComponent(ctxTargetPath);
     else if (act === 'extract') window.location = '/extract?path=' + encodeURIComponent(ctxTargetPath);
-    else if (act === 'delete') {{
+    else if (act === 'eject') {{
+      menu.hidden = true;
+      window.ejectDrive(ctxTargetPath.split('/').pop());
+    }} else if (act === 'delete') {{
       opField.value = 'delete';
       menu.hidden = true;
       bulkForm.requestSubmit();
@@ -1911,7 +2145,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     except BaseException:
                         shutil.rmtree(dest_dir, ignore_errors=True)  # no half-extracted folder left behind
                         raise
-                job_start(f"Extracting {os.path.basename(real_path)}", work)
+                job_start(f"Extracting {os.path.basename(real_path)}", work,
+                          done_text=f"Extracted {os.path.basename(real_path)}",
+                          touches=[real_path, dest_dir])
             self.redirect("/?path=" + urllib.parse.quote(parent_rel))
         elif parsed.path == "/download":
             real_path, relpath = safe_path(rel)
@@ -1930,6 +2166,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_file(real_path, mimetypes.guess_type(real_path)[0] or "application/octet-stream")
         elif parsed.path == "/jobs":
             self.send_json(jobs_snapshot())
+        elif parsed.path == "/status":
+            # One cheap call for the Desktop shell: running jobs (top-bar
+            # progress), USB drives, and any notifications it hasn't shown yet.
+            try:
+                since = int(qs.get("since", [""])[0])
+            except ValueError:
+                since = None
+            events, latest = events_since(since)
+            self.send_json({"jobs": jobs_snapshot(), "usb": USB_STATE["drives"],
+                            "events": events, "seq": latest})
         else:
             self.send_html(render_error("Page not found."), code=404)
 
@@ -2075,6 +2321,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         pass
             self.redirect("/?path=" + urllib.parse.quote(cur_rel))
 
+        elif parsed.path == "/usb-eject":
+            # Same guard the power buttons use: a plain cross-site form post
+            # can't set a custom header, so it can't unmount your drive.
+            if self.headers.get("X-LegasyNAS-Confirm") != "yes":
+                self.send_json({"ok": False, "error": "Missing confirmation header"}, 403)
+                return
+            job = start_eject(fields.get("name", [""])[0])
+            self.send_json({"ok": True, "job": job["id"]})
+
         elif parsed.path == "/jobs-dismiss":
             try:
                 jid = int(fields.get("id", [""])[0])
@@ -2102,5 +2357,6 @@ if __name__ == "__main__":
     # Threads default to an 8MB stack; on a 256MB box a handful of open
     # connections shouldn't be able to add up to anything worth noticing.
     threading.stack_size(1024 * 1024)
+    threading.Thread(target=usb_watch, daemon=True).start()
     with ReusableServer(("0.0.0.0", PORT), Handler) as httpd:
         httpd.serve_forever()

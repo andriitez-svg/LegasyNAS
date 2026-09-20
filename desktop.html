@@ -96,7 +96,44 @@ body{
   animation: pulse 2.6s ease-in-out infinite;
 }
 
-.topbar-right{ display:flex; align-items:center; gap:10px; }
+.topbar-right{ display:flex; align-items:center; gap:10px; flex:none; }
+
+/* Copy/move/zip progress, right next to the NAS name so it's visible whichever
+   app is in the window. margin-right:auto keeps the right-hand pills pinned. */
+.topjob{
+  display:flex; align-items:center; gap:11px; margin:0 auto 0 12px; min-width:0; max-width:52vw;
+  padding:8px 14px; border-radius:7px; font-size:12.5px; color:var(--text);
+  background:var(--pill-bg); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+  border:1px solid var(--dock-line); box-shadow:var(--shadow-soft), var(--ring);
+}
+.topjob[hidden]{ display:none !important; }
+.topjob-label{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.topjob-bar{ flex:none; width:150px; height:6px; border-radius:4px; overflow:hidden; background:var(--window-line); }
+.topjob-bar i{ display:block; height:100%; width:0; background:var(--signal-strong); transition:width .4s ease; }
+.topjob-bar.indet i{ width:35%; animation:topslide 1.2s ease-in-out infinite; }
+.topjob-pct{ flex:none; min-width:34px; text-align:right; font-family:'Plex Mono'; font-size:12px; color:var(--text-muted); }
+@keyframes topslide{ 0%{ margin-left:-35%; } 100%{ margin-left:100%; } }
+@media (max-width:820px){ .topjob-bar{ width:70px; } }
+
+/* System messages: bottom-right corner, newest at the bottom, click to dismiss. */
+#toasts{
+  position:fixed; right:18px; bottom:18px; z-index:200;
+  display:flex; flex-direction:column; align-items:flex-end; gap:10px; pointer-events:none;
+}
+.toast{
+  pointer-events:auto; cursor:pointer; display:flex; align-items:flex-start; gap:10px;
+  max-width:360px; padding:12px 15px; border-radius:10px; font-size:13px; line-height:1.4;
+  color:var(--text); background:var(--window-bg); border:1px solid var(--window-line);
+  box-shadow:var(--shadow); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+  animation:popIn .25s ease both;
+}
+.toast .t-ico{ flex:none; width:18px; text-align:center; font-weight:700; }
+.toast.success .t-ico{ color:var(--good); }
+.toast.info .t-ico{ color:var(--signal-strong); }
+.toast.warning .t-ico{ color:var(--warn); }
+.toast.warning{ border-color:var(--warn); }
+.toast.error .t-ico{ color:var(--critical); }
+.toast.error{ border-color:var(--critical); }
 
 .pill{
   display:flex; align-items:center; gap:15px;
@@ -368,10 +405,16 @@ body{
 </style>
 
 <div id="wallpaper"></div>
+<div id="toasts" aria-live="polite"></div>
 
 <div class="desktop">
   <div class="topbar">
     <div class="brand"><span class="brand-dot"></span>LegasyNAS</div>
+    <div class="topjob" id="topjob" hidden>
+      <span class="topjob-label" id="topjob-label"></span>
+      <span class="topjob-bar" id="topjob-bar"><i></i></span>
+      <span class="topjob-pct" id="topjob-pct"></span>
+    </div>
     <div class="topbar-right">
       <div class="pill" id="resource-pill">
         <span class="metric"><span>CPU</span><b id="m-cpu">&mdash;</b></span>
@@ -926,12 +969,14 @@ body{
     fetch(act.url, { method: "POST", headers: { "X-LegasyNAS-Confirm": "yes" } })
       .then(function(r){
         $("sys-result").textContent = r.ok ? act.done : "Failed (" + r.status + ")";
+        showToast({ level: r.ok ? "info" : "error", text: r.ok ? act.done : "Failed (" + r.status + ")" });
         $("sys-result").hidden = false;
       })
       .catch(function(){
         // The box often drops the connection as it goes down, which is a
         // success from the user's point of view, not an error.
         $("sys-result").textContent = act.done;
+        showToast({ level: "info", text: act.done });
         $("sys-result").hidden = false;
       });
     pendingAction = null;
@@ -1083,5 +1128,77 @@ body{
   }
   pollGlances();
   setInterval(pollGlances, 5000);
+
+  // ---------- live NAS activity: top-bar progress + corner notifications ----------
+  // The Files app knows what it's copying and which drives are plugged in. The
+  // shell asks it (through serve.py's /nas/status relay) and shows the answer
+  // where you'll see it whichever app is in the window.
+  var nasSeq = null, nasTimer = null, lastNasPoll = 0;
+  var TOAST_ICON = { success: "\u2713", info: "\u2139", warning: "\u26A0", error: "\u2715" };
+
+  function showToast(ev){
+    var box = $("toasts");
+    var el = document.createElement("div");
+    el.className = "toast " + (ev.level || "info");
+    var ico = document.createElement("span");
+    ico.className = "t-ico";
+    ico.textContent = TOAST_ICON[ev.level] || TOAST_ICON.info;
+    var txt = document.createElement("span");
+    txt.textContent = ev.text;
+    el.appendChild(ico);
+    el.appendChild(txt);
+    function close(){ if(el.parentNode) el.parentNode.removeChild(el); }
+    el.addEventListener("click", close);
+    box.appendChild(el);
+    while(box.children.length > 5) box.removeChild(box.firstChild);
+    // Problems stay up longer than good news.
+    setTimeout(close, (ev.level === "error" || ev.level === "warning") ? 14000 : 6500);
+  }
+
+  function renderTopJob(jobs){
+    var running = jobs.filter(function(j){ return j.state === "running"; });
+    var box = $("topjob");
+    if(!running.length){ box.hidden = true; return; }
+    var j = running[0];
+    var known = j.total > 0;
+    var pct = known ? Math.min(100, Math.floor(j.done * 100 / j.total)) : 0;
+    $("topjob-label").textContent = j.label + (running.length > 1 ? "  (+" + (running.length - 1) + " more)" : "");
+    var bar = $("topjob-bar");
+    bar.className = "topjob-bar" + (known ? "" : " indet");
+    bar.querySelector("i").style.width = known ? pct + "%" : "";
+    $("topjob-pct").textContent = known ? pct + "%" : "\u2026";
+    box.title = known ? fmtBytes(j.done) + " of " + fmtBytes(j.total) : "Working\u2026";
+    box.hidden = false;
+  }
+
+  function pollNas(){
+    clearTimeout(nasTimer);
+    lastNasPoll = Date.now();
+    fetch("/nas/status" + (nasSeq === null ? "" : "?since=" + nasSeq), { credentials: "same-origin", cache: "no-store" })
+      .then(function(r){ return r.json(); })
+      .then(function(st){
+        if(typeof st.seq !== "number") throw new Error("no status");
+        // The first answer only sets the starting point - opening the page
+        // never replays old news.
+        if(nasSeq !== null) (st.events || []).forEach(showToast);
+        nasSeq = st.seq;
+        var jobs = st.jobs || [];
+        renderTopJob(jobs);
+        var busy = jobs.some(function(j){ return j.state === "running"; });
+        nasTimer = setTimeout(pollNas, busy ? 1500 : 5000);
+      })
+      .catch(function(){ nasTimer = setTimeout(pollNas, 10000); });
+  }
+
+  // An app in the window (the Files page) nudges us the moment it sees a job
+  // running, so the bar appears at once instead of at the next slow check.
+  window.addEventListener("message", function(e){
+    if(e.data !== "legasynas-poll" || Date.now() - lastNasPoll < 1000) return;
+    var known = Object.keys(APPS).some(function(k){
+      try{ return new URL(APPS[k].url).origin === e.origin; }catch(x){ return false; }
+    });
+    if(known) pollNas();
+  });
+  pollNas();
 })();
 </script>

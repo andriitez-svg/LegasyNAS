@@ -1,4 +1,5 @@
-"""Regression tests for big-file handling in the Files app (filemanager.py).
+"""Regression tests for the Files app (filemanager.py) and its Desktop-shell relay:
+big-file handling, the USB folder guard, notifications, and Eject.
 
 Covers what used to break: a single-threaded server that froze during any long
 download or copy, copies that died silently and left truncated files, no way to
@@ -215,6 +216,187 @@ check("fs_type_of resolves a real path to some filesystem type", isinstance(fm.f
 # ---- 11. HTTP flow: POST /bulk returns at once and the strip is on the page ------------------------------------
 st, _, page = get("/?path=")
 check("listing page carries the progress strip", st == 200 and b'id="jobs-bar"' in page and b"/jobs" in page)
+
+# ==== 13. USB folder guard, status/notifications, and Eject ==========================================
+import subprocess as _subprocess
+
+USB = os.path.join(ROOT, "USB")
+os.makedirs(os.path.join(USB, "STICK"), exist_ok=True)
+os.makedirs(os.path.join(USB, "plainfolder"), exist_ok=True)
+open(os.path.join(ROOT, "src", "tiny.txt"), "w").write("hello")
+
+real_ismount = os.path.ismount
+real_mount_table = fm._mount_table
+def fake_ismount(p):
+    return os.path.realpath(p) == os.path.realpath(os.path.join(USB, "STICK")) or real_ismount(p)
+def fake_table():
+    t = dict(real_mount_table())
+    t[os.path.realpath(os.path.join(USB, "STICK"))] = ("/dev/sdb1", "ext4")
+    return t
+os.path.ismount = fake_ismount
+fm._mount_table = fake_table
+
+def run_job(job):
+    return wait_job(job["id"])
+
+# -- the guard: nothing may be copied into the USB holder or an unmounted drive folder
+j = run_job(fm.do_bulk_move_or_copy(["src/tiny.txt"], "USB", "copy"))
+check("copying straight into the USB folder is refused", j["state"] == "error" and "only holds drives" in j["error"], str(j))
+check("...and nothing was written there", not os.path.exists(os.path.join(USB, "tiny.txt")))
+j = run_job(fm.do_bulk_move_or_copy(["src/tiny.txt"], "USB/plainfolder", "copy"))
+check("copying into an unmounted folder under USB is refused", j["state"] == "error" and "isn't a mounted USB drive" in j["error"], str(j))
+j = run_job(fm.do_bulk_move_or_copy(["src/tiny.txt"], "USB/newdir", "copy"))
+check("...including a folder name that doesn't exist yet", j["state"] == "error" and not os.path.exists(os.path.join(USB, "newdir")), str(j))
+j = run_job(fm.do_bulk_move_or_copy(["src/tiny.txt"], "USB/STICK", "copy"))
+check("copying into a MOUNTED drive still works", j["state"] == "done" and os.path.exists(os.path.join(USB, "STICK", "tiny.txt")), str(j))
+j = run_job(fm.do_bulk_move_or_copy(["src/tiny.txt"], "USB/STICK/sub", "copy"))
+check("...and into a subfolder of it", j["state"] == "done" and os.path.exists(os.path.join(USB, "STICK", "sub", "tiny.txt")), str(j))
+
+# -- USB drive listing
+drives = fm.usb_drives()
+check("usb_drives lists only real mounts", [d["name"] for d in drives] == ["STICK"] and drives[0]["fstype"] == "ext4", str(drives))
+
+# -- /status: baseline, then only news
+st, _, body = get("/status")
+s0 = json.loads(body)
+check("first /status call sets a baseline and replays nothing", st == 200 and s0["events"] == [] and isinstance(s0["seq"], int), str(s0)[:200])
+j = run_job(fm.do_bulk_move_or_copy(["src/tiny.txt"], "USB/STICK/more", "copy"))
+s1 = json.loads(get(f"/status?since={s0['seq']}")[2])
+check("a finished job becomes a success notification, once",
+      len(s1["events"]) == 1 and s1["events"][0]["level"] == "success" and "Copied tiny.txt" in s1["events"][0]["text"], str(s1["events"]))
+s2 = json.loads(get(f"/status?since={s1['seq']}")[2])
+check("...and isn't repeated on the next call", s2["events"] == [], str(s2["events"]))
+j = run_job(fm.do_bulk_move_or_copy(["src/tiny.txt"], "USB", "copy"))
+s3 = json.loads(get(f"/status?since={s2['seq']}")[2])
+check("a failed job becomes an error notification with the reason",
+      len(s3["events"]) == 1 and s3["events"][0]["level"] == "error" and "only holds drives" in s3["events"][0]["text"], str(s3["events"]))
+check("/status reports the USB drives", [d["name"] for d in s3["usb"]] == ["STICK"] or s3["usb"] == [])
+
+# -- the Eject button is on drives, only
+fm.USB_STATE["drives"] = fm.usb_drives()
+page = get("/?path=USB")[2].decode()
+check("listing shows an Eject button on the mounted drive", 'data-eject="STICK"' in page and "&#9167; Eject" in page)
+check("...and marks the row for the right-click menu", 'data-usb="1"' in page)
+check("...but not on an ordinary folder beside it", 'data-eject="plainfolder"' not in page)
+check("right-click menu has an Eject drive item", 'data-act="eject"' in page)
+tiles = get("/?path=USB&view=tiles")[2].decode()
+check("tiles view has the Eject button too", 'data-eject="STICK"' in tiles)
+check("root listing has no Eject button", "eject-btn" not in get("/?path=")[2].decode().split("<style")[-1].split("</style>")[-1] or 'data-eject=' not in get("/?path=")[2].decode())
+
+# -- eject job, with the privileged helper stubbed
+real_run = fm.subprocess.run
+calls = []
+def stub(rc=0, err=""):
+    def _run(cmd, **kw):
+        calls.append(cmd)
+        return _subprocess.CompletedProcess(cmd, rc, stdout="", stderr=err)
+    return _run
+
+fm.subprocess.run = stub(0)
+j = run_job(fm.start_eject("STICK"))
+check("eject calls the sudo helper with just the drive name", calls and calls[-1] == ["sudo", "-n", "/usr/local/sbin/usb-eject", "STICK"], str(calls))
+check("successful eject finishes", j["state"] == "done", str(j))
+ev = fm.events_since(0)[0]
+check("...and says it's safe to unplug", any("'STICK' ejected - safe to unplug" in e["text"] for e in ev))
+check("...without a bogus 'removed without ejecting' warning afterwards", "STICK" in fm._EXPECTED_GONE)
+
+fm.subprocess.run = stub(3, "'STICK' is busy - something is still using it.")
+j = run_job(fm.start_eject("STICK"))
+check("a busy drive reports the helper's reason", j["state"] == "error" and "busy" in j["error"], str(j))
+check("...and isn't marked as expected-gone", "STICK" not in fm._EXPECTED_GONE)
+
+def missing(cmd, **kw):
+    raise FileNotFoundError("sudo")
+fm.subprocess.run = missing
+j = run_job(fm.start_eject("STICK"))
+check("missing sudo gives a plain 're-run install.sh' message", j["state"] == "error" and "install.sh" in j["error"], str(j))
+fm.subprocess.run = stub(1, "sudo: a password is required")
+j = run_job(fm.start_eject("STICK"))
+check("a sudoers problem is explained, not shown raw", j["state"] == "error" and "install.sh" in j["error"] and "password" not in j["error"], str(j))
+fm.subprocess.run = real_run
+
+# invalid / unmounted / in-use refusals never reach the helper
+calls.clear()
+fm.subprocess.run = stub(0)
+for bad in ("../etc", "a/b", "", ".", "..", "x" * 80, "with space"):
+    j = run_job(fm.start_eject(bad))
+    check(f"eject refuses the name {bad!r} without calling the helper", j["state"] == "error" and not calls, str(j))
+j = run_job(fm.start_eject("plainfolder"))
+check("eject refuses a folder that isn't a mounted drive", j["state"] == "error" and "isn't mounted" in j["error"] and not calls, str(j))
+
+gate = threading.Event()
+def slow_worker(job):
+    gate.wait(10)
+running_copy = fm.job_start("Copying big thing to STICK", slow_worker, wait=0,
+                            touches=[os.path.realpath(os.path.join(USB, "STICK", "x"))])
+j = run_job(fm.start_eject("STICK"))
+check("eject refuses while a copy to that drive is still running", j["state"] == "error" and "still in use" in j["error"] and not calls, str(j))
+gate.set(); run_job(running_copy)
+fm.subprocess.run = real_run
+
+# -- HTTP: the eject endpoint needs the confirm header
+req = urllib.request.Request(BASE + "/usb-eject", data=b"name=STICK", method="POST")
+try:
+    urllib.request.urlopen(req, timeout=5); code = 200
+except urllib.error.HTTPError as e:
+    code = e.code
+check("POST /usb-eject without the confirm header is refused (403)", code == 403, str(code))
+fm.subprocess.run = stub(0)
+req = urllib.request.Request(BASE + "/usb-eject", data=b"name=STICK", method="POST", headers={"X-LegasyNAS-Confirm": "yes"})
+res = json.loads(urllib.request.urlopen(req, timeout=5).read())
+check("...and with it, returns a job id", res.get("ok") is True and isinstance(res.get("job"), int), str(res))
+wait_job(res["job"])
+fm.subprocess.run = real_run
+
+# -- the watcher: plug-in, unplug-without-eject, and eject-then-gone
+seq = iter([[], [{"name": "K", "device": "/dev/sdb1", "fstype": "ext4", "total": 5 * 1024 ** 3, "free": 1}],
+            [{"name": "K", "device": "/dev/sdb1", "fstype": "ext4", "total": 5 * 1024 ** 3, "free": 1}],
+            [], [{"name": "Z", "device": "/dev/sdc1", "fstype": "exfat", "total": 1, "free": 1}], []])
+last = {"v": []}
+def scripted():
+    try:
+        last["v"] = next(seq)
+    except StopIteration:
+        pass
+    return last["v"]
+real_usb_drives = fm.usb_drives
+fm.usb_drives = scripted
+base_seq = fm.events_since(None)[1]
+fm._EXPECTED_GONE["Z"] = time.time()          # Z is ejected on purpose; K is yanked
+watch_stop = threading.Event()
+wt = threading.Thread(target=fm.usb_watch, kwargs={"interval": 0.03, "stop": watch_stop}, daemon=True)
+wt.start(); time.sleep(0.6)
+watch_stop.set(); wt.join(2)                  # stop it before restoring the real lookup
+fm.usb_drives = real_usb_drives
+texts = [e["text"] for e in fm.events_since(base_seq)[0]]
+check("plugging a drive in is announced", any("'K' connected" in t and "5.0GB" in t for t in texts), str(texts))
+check("pulling one out without ejecting is a warning", any("'K' was removed without ejecting" in t for t in texts), str(texts))
+check("an eject-then-gone drive does NOT trigger that warning", not any("'Z' was removed" in t for t in texts), str(texts))
+
+# -- serve.py relays /status to the Files app (this is how the shell reads it)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import serve as sv
+sv.AUTH_FILE = "/nonexistent/auth.conf"
+os.environ["PORT_FILES"] = str(PORT)
+shell = sv.ReusableServer(("127.0.0.1", 0), sv.Handler)
+threading.Thread(target=shell.serve_forever, daemon=True).start()
+SBASE = f"http://127.0.0.1:{shell.server_address[1]}"
+r = json.loads(urllib.request.urlopen(SBASE + "/nas/status", timeout=8).read())
+check("the shell relays /nas/status from the Files app", isinstance(r.get("seq"), int) and "jobs" in r and "usb" in r, str(r)[:200])
+r2 = json.loads(urllib.request.urlopen(SBASE + f"/nas/status?since={r['seq']}", timeout=8).read())
+check("...including the 'since' parameter", r2["events"] == [], str(r2)[:200])
+r3 = json.loads(urllib.request.urlopen(SBASE + "/nas/status?since=abc;rm", timeout=8).read())
+check("...and ignores a junk 'since' instead of passing it on", r3["events"] == [] and isinstance(r3["seq"], int), str(r3)[:200])
+os.environ["PORT_FILES"] = "1"      # nothing listens there
+try:
+    urllib.request.urlopen(SBASE + "/nas/status", timeout=8); code = 200
+except urllib.error.HTTPError as e:
+    code = e.code
+check("if the Files app is down the shell answers 502, not a hang", code == 502, str(code))
+os.environ["PORT_FILES"] = str(PORT)
+
+os.path.ismount = real_ismount
+fm._mount_table = real_mount_table
 
 print()
 print("ALL PASSED" if not fails else f"{len(fails)} FAILED: {fails}")

@@ -295,6 +295,31 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path == "/nas/status" or self.path.startswith("/nas/status?"):
+            # The Files app tracks the copy/move/zip jobs, USB drives and the
+            # notifications worth showing. The shell is a different origin, so
+            # it can't ask the Files app directly without loosening CORS -
+            # instead it asks here and this relays, the way Glances is relayed
+            # below, carrying the caller's own login cookie along so the Files
+            # app's normal auth check still applies.
+            since = urllib.parse.parse_qs(self.path.partition("?")[2]).get("since", [""])[0]
+            url = f"http://127.0.0.1:{int(config('PORT_FILES', '8093'))}/status"
+            if since.isdigit():
+                url += "?since=" + since
+            req = urllib.request.Request(url, headers={"Cookie": self.headers.get("Cookie", "")})
+            try:
+                with urllib.request.urlopen(req, timeout=4) as resp:
+                    data, code = resp.read(), 200
+            except urllib.error.HTTPError as e:
+                data, code = e.read(), e.code
+            except Exception:
+                data, code = b"{}", 502
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if self.path.startswith("/glances/"):
             endpoint = self.path[len("/glances/"):]
             try:
